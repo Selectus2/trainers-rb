@@ -2,20 +2,22 @@ Gem::Specification.new do |spec|
   spec.name          = "trainers-rb"
   spec.version       = "0.1.0"
   spec.authors       = ["Vishwajeetsingh Desurkar"]
-  spec.email         = ["selectus2@users.noreply.rubygems.org"]
+  spec.email         = ["vishwajeetsinghd@gmail.com"]
   spec.summary       = "Fine-tune transformer models in Ruby"
   spec.description   = "Training loop, LoRA, and optimization utilities for fine-tuning " \
                         "HuggingFace transformer models using torch-rb and transformers-rb. " \
                         "Supports full fine-tuning, LoRA adapters, learning rate scheduling, " \
                         "callbacks, and model serialization via safetensors."
-  spec.homepage      = "https://github.com/trainers-rb/trainers-rb"
+  spec.homepage      = "https://github.com/Selectus2/trainers-rb"
   spec.license       = "MIT"
   spec.required_ruby_version = ">= 3.1.0"
 
   spec.metadata = {
-    "homepage_uri"    => spec.homepage,
-    "source_code_uri" => spec.homepage,
-    "changelog_uri"   => "#{spec.homepage}/blob/main/CHANGELOG.md"
+    "homepage_uri"      => "https://github.com/Selectus2/trainers-rb",
+    "source_code_uri"   => "https://github.com/Selectus2/trainers-rb",
+    "changelog_uri"     => "https://github.com/Selectus2/trainers-rb/blob/main/CHANGELOG.md",
+    "bug_tracker_uri"   => "https://github.com/Selectus2/trainers-rb/issues",
+    "rubygems_mfa_required" => "true"
   }
 
   spec.files = Dir["lib/**/*.rb", "LICENSE.txt", "README.md", "CHANGELOG.md"]
