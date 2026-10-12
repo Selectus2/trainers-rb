@@ -286,7 +286,7 @@ trainers-rb adds the training layer that transformers-rb intentionally omits. Bo
 
 ## Contributing
 
-Bug reports and pull requests are welcome on GitHub.
+Bug reports and pull requests are welcome on GitHub. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, testing, and pull request guidelines.
 
 ## License
 
