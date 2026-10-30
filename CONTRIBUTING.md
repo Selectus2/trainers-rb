@@ -70,7 +70,7 @@ After editing `Appraisals`, regenerate the gemfiles with `bundle exec appraisal 
 
 ### What CI runs
 
-Ruby 3.3, 3.4 and 4.0 on Linux against both gemfiles, plus Ruby 4.0 with torch-rb 0.27 on macOS arm64. The torch-rb 0.17 jobs on Ruby 3.4 and 4.0 are allowed to fail. They predate those Rubies, and are kept to show when the oldest pair stops building.
+Ruby 3.3, 3.4 and 4.0 on Linux against both gemfiles, plus Ruby 4.0 with torch-rb 0.27 on macOS arm64. Every job must pass.
 
 ## What a good PR looks like
 

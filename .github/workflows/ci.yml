@@ -13,9 +13,6 @@ jobs:
   test:
     name: Ruby ${{ matrix.ruby }} / ${{ matrix.gemfile }} / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    # Combinations the old torch-rb/rice pair may not build on are reported
-    # but do not fail the run; see CONTRIBUTING.md
-    continue-on-error: ${{ matrix.experimental || false }}
     strategy:
       fail-fast: false
       matrix:
@@ -27,12 +24,6 @@ jobs:
             libtorch: 2.4.0
           - gemfile: torch_0_27
             libtorch: 2.15.0
-          - ruby: "3.4"
-            gemfile: torch_0_17
-            experimental: true
-          - ruby: "4.0"
-            gemfile: torch_0_17
-            experimental: true
           # Apple Silicon, the platform most contributors develop on
           - os: macos-15
             ruby: "4.0"

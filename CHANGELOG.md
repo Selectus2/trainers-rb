@@ -20,7 +20,7 @@
 
 ### Internal
 
-- CI on Ruby 3.3, 3.4 and 4.0 against torch-rb 0.17 (LibTorch 2.4.0) and 0.27 (LibTorch 2.15.0), using Appraisal gemfiles, plus macOS arm64 (#9)
+- CI on Ruby 3.3, 3.4 and 4.0 against torch-rb 0.17 (LibTorch 2.4.0) and 0.27 (LibTorch 2.15.0), using Appraisal gemfiles, plus macOS arm64; every job is required (#9)
 - Tests for LR schedulers and warmup (#6), callback order and arguments (#7), LoRA shapes, identity init, merge and adapter round-trip (#5), and a public API surface test (#10)
 - Development dependency minitest bumped to ~> 6.0
 - CONTRIBUTING.md with LibTorch setup, SECURITY.md, README badges and a known-limitations section (#11)
