@@ -36,11 +36,19 @@ module Trainers
       @lora_B = Torch::NN::Parameter.new(Torch.zeros(@out_features, @r))
 
       @lora_dropout = lora_dropout > 0 ? Torch::NN::Dropout.new(p: lora_dropout) : nil
+      @merged       = false
+    end
+
+    def merged?
+      @merged
     end
 
     def forward(x)
       # Original linear
       base_output = Torch::NN::F.linear(x, @weight, @bias)
+
+      # After merge! the adapter is already folded into @weight
+      return base_output if @merged
 
       # LoRA path
       lora_input = @lora_dropout ? @lora_dropout.call(x) : x
@@ -49,12 +57,28 @@ module Trainers
       base_output + lora_output
     end
 
-    # Merge LoRA weights into the base weight matrix (for inference)
+    # Merge LoRA weights into the base weight matrix (for inference).
+    # Idempotent: merging twice would add the adapter twice.
     def merge!
+      return self if @merged
+
       Torch.no_grad do
         @weight.add!(@lora_B.matmul(@lora_A) * @scaling)
       end
+      @merged = true
       self
+    end
+
+    # A plain Linear holding the merged weights, so a merged model has the
+    # same parameter names as the base model
+    def to_linear
+      merge!
+      linear = Torch::NN::Linear.new(@in_features, @out_features, bias: !@bias.nil?)
+      Torch.no_grad do
+        linear.weight.copy!(@weight)
+        linear.bias.copy!(@bias) if @bias
+      end
+      linear
     end
 
     # Extract LoRA adapter state for saving

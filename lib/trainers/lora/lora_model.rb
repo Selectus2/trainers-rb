@@ -56,16 +56,14 @@ module Trainers
       model
     end
 
-    # Merge all LoRA weights back into base weights (for inference)
+    # Merge all LoRA weights back into base weights (for inference).
+    # Each LoraLinear is replaced by a plain Linear with the merged weights.
     def self.merge(model)
-      count = 0
-      model.named_modules.each do |_, mod|
-        if mod.is_a?(LoraLinear)
-          mod.merge!
-          count += 1
-        end
+      lora_modules = model.named_modules.select { |_, mod| mod.is_a?(LoraLinear) }
+      lora_modules.each do |name, mod|
+        LoraUtils.replace_module(model, name, mod.to_linear)
       end
-      puts "Merged #{count} LoRA adapters into base model"
+      puts "Merged #{lora_modules.size} LoRA adapters into base model"
       model
     end
 

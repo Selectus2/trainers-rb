@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Ruby ${{ matrix.ruby }} / ${{ matrix.gemfile }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04]
+        ruby: ["3.3", "3.4", "4.0"]
+        gemfile: [torch_0_17, torch_0_27]
+        include:
+          - gemfile: torch_0_17
+            libtorch: 2.4.0
+          - gemfile: torch_0_27
+            libtorch: 2.15.0
+          # Apple Silicon, the platform most contributors develop on
+          - os: macos-15
+            ruby: "4.0"
+            gemfile: torch_0_27
+            libtorch: 2.15.0
+    env:
+      BUNDLE_GEMFILE: ${{ github.workspace }}/gemfiles/${{ matrix.gemfile }}.gemfile
+      LIBTORCH_VERSION: ${{ matrix.libtorch }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/cache@v5
+        id: cache-libtorch
+        with:
+          path: ~/libtorch
+          key: ${{ runner.os }}-${{ runner.arch }}-libtorch-${{ matrix.libtorch }}
+
+      - name: Download LibTorch ${{ matrix.libtorch }}
+        if: steps.cache-libtorch.outputs.cache-hit != 'true'
+        run: |
+          cd ~
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            # LibTorch < 2.8 published separate pre/cxx11 ABI builds; torch-rb needs cxx11
+            case "$LIBTORCH_VERSION" in
+              2.[0-7].*) zip="libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2Bcpu.zip" ;;
+              *)         zip="libtorch-shared-with-deps-${LIBTORCH_VERSION}%2Bcpu.zip" ;;
+            esac
+          else
+            zip="libtorch-macos-arm64-${LIBTORCH_VERSION}.zip"
+          fi
+          wget -q -O libtorch.zip "https://download.pytorch.org/libtorch/cpu/${zip}"
+          unzip -q libtorch.zip
+          rm libtorch.zip
+
+      - if: runner.os == 'macOS'
+        run: brew install libomp
+
+      # bundler-cache below compiles torch-rb, so point it at LibTorch first
+      - name: Configure torch-rb build
+        run: |
+          echo "BUNDLE_BUILD__TORCH___RB=--with-torch-dir=$HOME/libtorch" >> "$GITHUB_ENV"
+          echo "MAKE=make -j$(getconf _NPROCESSORS_ONLN)" >> "$GITHUB_ENV"
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+          # Separate gem caches per LibTorch, since torch-rb links against it
+          cache-version: libtorch-${{ matrix.libtorch }}
+
+      - name: Versions
+        run: |
+          bundle exec ruby -e 'require "torch"; puts "Ruby #{RUBY_VERSION}, torch-rb #{Torch::VERSION}"'
+
+      - run: bundle exec rake test

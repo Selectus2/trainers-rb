@@ -9,3 +9,6 @@ pkg/
 Gemfile.lock
 vendor/bundle/
 .bundle/
+
+# Appraisal lockfiles
+gemfiles/*.gemfile.lock
