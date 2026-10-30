@@ -42,9 +42,9 @@ jobs:
       BUNDLE_GEMFILE: ${{ github.workspace }}/gemfiles/${{ matrix.gemfile }}.gemfile
       LIBTORCH_VERSION: ${{ matrix.libtorch }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         id: cache-libtorch
         with:
           path: ~/libtorch
@@ -84,6 +84,7 @@ jobs:
           cache-version: libtorch-${{ matrix.libtorch }}
 
       - name: Versions
-        run: bundle exec ruby -e 'require "torch"; puts "Ruby #{RUBY_VERSION}, torch-rb #{Torch::VERSION}, LibTorch #{Torch.const_defined?(:LIBTORCH_VERSION) ? Torch::LIBTORCH_VERSION : "?"}"'
+        run: |
+          bundle exec ruby -e 'require "torch"; puts "Ruby #{RUBY_VERSION}, torch-rb #{Torch::VERSION}"'
 
       - run: bundle exec rake test
