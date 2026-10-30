@@ -1,5 +1,10 @@
 # trainers-rb
 
+[![Gem Version](https://img.shields.io/gem/v/trainers-rb)](https://rubygems.org/gems/trainers-rb)
+[![CI](https://github.com/Selectus2/trainers-rb/actions/workflows/ci.yml/badge.svg)](https://github.com/Selectus2/trainers-rb/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.txt)
+[![Ruby](https://img.shields.io/badge/ruby-3.3%20%7C%203.4%20%7C%204.0-red.svg)](.github/workflows/ci.yml)
+
 Fine-tune transformer models in Ruby.
 
 trainers-rb provides a training loop, LoRA (Low-Rank Adaptation), learning rate scheduling, and model serialization for HuggingFace transformer models loaded via [transformers-rb](https://github.com/ankane/transformers-ruby). It builds on [torch-rb](https://github.com/ankane/torch.rb) for autograd, optimizers, and tensor operations.
@@ -22,15 +27,16 @@ gem install trainers-rb
 
 ### Prerequisites
 
-trainers-rb depends on torch-rb, which requires LibTorch:
+trainers-rb depends on torch-rb, which compiles against LibTorch. Use the LibTorch version that matches your torch-rb: 2.15.0 for torch-rb 0.27, or 2.4.0 for torch-rb 0.17.
 
 ```bash
 # macOS arm64
-curl -L -o /tmp/libtorch.zip https://download.pytorch.org/libtorch/cpu/libtorch-macos-arm64-2.4.0.zip
-unzip /tmp/libtorch.zip -d ~/libtorch
-bundle config set build.torch-rb --with-torch-dir=$HOME/libtorch/libtorch
+curl -L -o /tmp/libtorch.zip https://download.pytorch.org/libtorch/cpu/libtorch-macos-arm64-2.15.0.zip
+unzip /tmp/libtorch.zip -d ~/libtorch-2.15.0
+bundle config set build.torch-rb --with-torch-dir=$HOME/libtorch-2.15.0/libtorch
 ```
 
+For Linux, and for running the tests, see [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Quick Start
 
 ```ruby
@@ -139,6 +145,8 @@ Trainers::LoraModel.load_adapters(model, "./lora-adapters")
 | `logging_steps` | `500` | Log every N steps |
 | `seed` | `42` | Random seed |
 | `no_mps` | `false` | Force CPU even if MPS is available |
+
+Invalid values, such as a negative learning rate, a zero batch size or an unknown `lr_scheduler_type`, raise `ArgumentError` when `TrainingArguments` is created.
 
 ## Callbacks
 
@@ -274,6 +282,19 @@ trainers-rb
 
 trainers-rb adds the training layer that transformers-rb intentionally omits. Both gems call into the same LibTorch C++ kernels for the actual computation.
 
+## Known limitations
+
+These are open correctness issues. They are tracked, and listed here so nobody discovers them the hard way:
+
+- **The learning-rate schedule is wrong with `gradient_accumulation_steps > 1`.** The scheduler is sized in micro-batches but stepped once per optimizer step, so it never decays fully. ([#12](https://github.com/Selectus2/trainers-rb/issues/12))
+- **`seed:` is never applied.** Runs are not reproducible. ([#13](https://github.com/Selectus2/trainers-rb/issues/13))
+- **`dataloader_drop_last:` and `label_names:` are accepted and ignored.** ([#14](https://github.com/Selectus2/trainers-rb/issues/14))
+- **Progress output goes to stdout through `puts`.** There is no logger to configure or silence. ([#15](https://github.com/Selectus2/trainers-rb/issues/15))
+- **`save_lora_adapters` returns `nil` instead of raising when a model has no adapters.** ([#16](https://github.com/Selectus2/trainers-rb/issues/16))
+- **A saved model cannot be loaded back.** No `config.json` is written. ([#17](https://github.com/Selectus2/trainers-rb/issues/17))
+- **Checkpoints cannot resume training.** Optimizer, scheduler and trainer state are not saved. ([#18](https://github.com/Selectus2/trainers-rb/issues/18))
+- **LoRA checkpoints save the full state dict** rather than just the adapters. ([#19](https://github.com/Selectus2/trainers-rb/issues/19))
+
 ## Roadmap
 
 - [ ] More model architectures in transformers-rb (GPT-2, Llama for text generation)
@@ -286,7 +307,7 @@ trainers-rb adds the training layer that transformers-rb intentionally omits. Bo
 
 ## Contributing
 
-Bug reports and pull requests are welcome on GitHub.
+Bug reports and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers LibTorch setup, running the tests against each supported torch-rb, and what a good PR looks like. Report security issues privately, as described in [SECURITY.md](SECURITY.md).
 
 ## License
 

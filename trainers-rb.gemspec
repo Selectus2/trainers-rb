@@ -1,6 +1,8 @@
+require_relative "lib/trainers/version"
+
 Gem::Specification.new do |spec|
   spec.name          = "trainers-rb"
-  spec.version       = "0.1.0"
+  spec.version       = Trainers::VERSION
   spec.authors       = ["Vishwajeetsingh Desurkar"]
   spec.email         = ["vishwajeetsinghd@gmail.com"]
   spec.summary       = "Fine-tune transformer models in Ruby"
@@ -29,5 +31,5 @@ Gem::Specification.new do |spec|
   spec.add_dependency "tokenizers",      ">= 0.5.3"
 
   spec.add_development_dependency "rake",     "~> 13.0"
-  spec.add_development_dependency "minitest", "~> 5.0"
+  spec.add_development_dependency "minitest", "~> 6.0"
 end
