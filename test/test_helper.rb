@@ -2,6 +2,9 @@ require "minitest/autorun"
 require "tmpdir"
 require "trainers-rb"
 
+# Tests opt in to logging explicitly; keep output clean by default
+Trainers.logger = nil
+
 # Synthetic fixture: a tiny model that never touches the network
 class FakeLinear < Torch::NN::Module
   def initialize(in_features, out_features)
@@ -40,6 +43,18 @@ class TinyClassifier < Torch::NN::Module
 end
 
 # Nested Linear layers named like a transformer attention block, for LoRA
+# Like TinyClassifier, but its labels arrive under a custom key
+class TargetClassifier < Torch::NN::Module
+  def initialize
+    super()
+    @fc = Torch::NN::Linear.new(4, 2)
+  end
+
+  def forward(input:, target: nil)
+    @fc.call(input)
+  end
+end
+
 class TinyAttention < Torch::NN::Module
   def initialize(dim)
     super()
@@ -69,7 +84,7 @@ module TestHelpers
   def synthetic_dataset(size = 8)
     rows = Array.new(size) do |i|
       label = i % 2
-      { input: Array.new(4) { |j| (label * 2.0 - 1.0) + j * 0.1 }, labels: label }
+      { input: Array.new(4) { |j| (label * 2.0 - 1.0) + j * 0.1 + i * 0.01 }, labels: label }
     end
     Trainers::Dataset.new(rows)
   end

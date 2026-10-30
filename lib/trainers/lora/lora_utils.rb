@@ -37,7 +37,7 @@ module Trainers
           parent = parent.instance_variable_get(:"@#{part}")
         end
 
-        raise "Could not find module part '#{part}' in #{target_name}" unless parent
+        raise AdapterError, "Could not find module part '#{part}' in #{target_name}" unless parent
       end
 
       child_name = parts.last
@@ -59,9 +59,9 @@ module Trainers
       end
 
       pct = total > 0 ? (trainable.to_f / total * 100) : 0.0
-      puts "trainable params: #{format_number(trainable)} || " \
-           "all params: #{format_number(total)} || " \
-           "trainable%: #{format('%.4f', pct)}%"
+      Trainers.log(:info, "trainable params: #{format_number(trainable)} || " \
+                          "all params: #{format_number(total)} || " \
+                          "trainable%: #{format('%.4f', pct)}%")
 
       { total: total, trainable: trainable, percentage: pct }
     end

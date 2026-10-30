@@ -44,32 +44,45 @@ module Trainers
     def on_save(args, state, control, **kwargs); end
   end
 
-  # Default callback: prints training progress to stdout
+  # Prints training progress to stdout. Opt in with callbacks: [PrinterCallback.new]
   class PrinterCallback < TrainerCallback
     def on_log(args, state, control, logs: nil, **kwargs)
       return unless logs
       output = logs.map { |k, v| "#{k}: #{format_value(v)}" }.join("  ")
-      puts "[step #{state.global_step}] #{output}"
+      emit "[step #{state.global_step}] #{output}"
     end
 
     def on_train_begin(args, state, control, **kwargs)
-      puts "Starting training: #{state.num_train_epochs} epochs, #{state.max_steps} total steps"
+      emit "Starting training: #{state.num_train_epochs} epochs, #{state.max_steps} total steps"
     end
 
     def on_train_end(args, state, control, **kwargs)
-      puts "Training complete. Total steps: #{state.global_step}"
+      emit "Training complete. Total steps: #{state.global_step}"
     end
 
     def on_evaluate(args, state, control, metrics: nil, **kwargs)
       return unless metrics
       output = metrics.map { |k, v| "#{k}: #{format_value(v)}" }.join("  ")
-      puts "[eval step #{state.global_step}] #{output}"
+      emit "[eval step #{state.global_step}] #{output}"
     end
 
     private
 
+    def emit(message)
+      puts message
+    end
+
     def format_value(v)
       v.is_a?(Float) ? format("%.4f", v) : v.to_s
+    end
+  end
+
+  # Default callback: reports the same progress through Trainers.logger
+  class LoggingCallback < PrinterCallback
+    private
+
+    def emit(message)
+      Trainers.log(:info, message)
     end
   end
 
@@ -95,7 +108,7 @@ module Trainers
       else
         @wait_count += 1
         if @wait_count >= @patience
-          puts "Early stopping triggered after #{@wait_count} evaluations without improvement"
+          Trainers.log(:info, "Early stopping triggered after #{@wait_count} evaluations without improvement")
           control.should_training_stop = true
         end
       end

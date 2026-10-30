@@ -122,7 +122,7 @@ class LoraTest < Minitest::Test
   end
 
   def test_no_matching_target_modules_raises
-    error = assert_raises(RuntimeError) { apply_lora(target_modules: ["q_proj"]) }
+    error = assert_raises(Trainers::AdapterError) { apply_lora(target_modules: ["q_proj"]) }
     assert_match "q_proj", error.message
   end
 

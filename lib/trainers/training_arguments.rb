@@ -88,6 +88,8 @@ module Trainers
       check(:warmup_steps, "a non-negative Integer") { |v| v.is_a?(Integer) && !v.negative? }
       check(:warmup_ratio, "a number between 0 and 1") { |v| v.is_a?(Numeric) && v.between?(0, 1) }
       check(:eval_steps, "nil or a positive Integer") { |v| v.nil? || (v.is_a?(Integer) && v.positive?) }
+      check(:seed, "nil or a non-negative Integer") { |v| v.nil? || (v.is_a?(Integer) && !v.negative?) }
+      check(:label_names, "an Array of Strings or Symbols") { |v| v.is_a?(Array) && v.all? { |n| n.is_a?(String) || n.is_a?(Symbol) } }
 
       check(:lr_scheduler_type, "one of #{SCHEDULER_TYPES.map(&:inspect).join(', ')}") { |v| SCHEDULER_TYPES.include?(v) }
       check(:eval_strategy, "one of #{STRATEGIES.map(&:inspect).join(', ')}") { |v| STRATEGIES.include?(v) }

@@ -54,6 +54,19 @@ class TrainingArgumentsTest < Minitest::Test
     end
   end
 
+  def test_rejects_bad_seed
+    assert_rejected :seed, -1, "nil or a non-negative Integer"
+    assert_rejected :seed, "42", "nil or a non-negative Integer"
+    assert_nil Trainers::TrainingArguments.new(seed: nil).seed
+  end
+
+  def test_rejects_bad_label_names
+    assert_rejected :label_names, "labels", "an Array of Strings or Symbols"
+    assert_rejected :label_names, [1], "an Array of Strings or Symbols"
+    assert_equal [:start_positions, "end_positions"],
+                 Trainers::TrainingArguments.new(label_names: [:start_positions, "end_positions"]).label_names
+  end
+
   def test_accepts_boundary_values
     args = Trainers::TrainingArguments.new(
       weight_decay: 0, max_grad_norm: 0.0, warmup_steps: 0, warmup_ratio: 1.0,
