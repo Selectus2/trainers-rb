@@ -35,7 +35,7 @@ module Trainers
       end
 
       if param_groups.empty?
-        raise "No trainable parameters found. Did you forget to unfreeze the model or apply LoRA?"
+        raise ConfigurationError, "No trainable parameters found. Did you forget to unfreeze the model or apply LoRA?"
       end
 
       Torch::Optim::AdamW.new(

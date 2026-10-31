@@ -12,7 +12,7 @@ Gem::Specification.new do |spec|
                         "callbacks, and model serialization via safetensors."
   spec.homepage      = "https://github.com/Selectus2/trainers-rb"
   spec.license       = "MIT"
-  spec.required_ruby_version = ">= 3.1.0"
+  spec.required_ruby_version = ">= 3.3.0"
 
   spec.metadata = {
     "homepage_uri"      => "https://github.com/Selectus2/trainers-rb",
@@ -29,6 +29,7 @@ Gem::Specification.new do |spec|
   spec.add_dependency "transformers-rb", ">= 0.2.0"
   spec.add_dependency "safetensors",     ">= 0.1.1"
   spec.add_dependency "tokenizers",      ">= 0.5.3"
+  spec.add_dependency "logger",          ">= 1.5"
 
   spec.add_development_dependency "rake",     "~> 13.0"
   spec.add_development_dependency "minitest", "~> 6.0"

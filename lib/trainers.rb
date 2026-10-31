@@ -5,6 +5,8 @@ require "json"
 require "fileutils"
 
 require_relative "trainers/version"
+require_relative "trainers/errors"
+require_relative "trainers/logging"
 require_relative "trainers/trainer_utils"
 require_relative "trainers/training_arguments"
 require_relative "trainers/data/dataset"
@@ -20,6 +22,14 @@ require_relative "trainers/lora/lora_model"
 require_relative "trainers/trainer"
 
 module Trainers
+  # Seeds Torch and Ruby's global RNG. Call before building a model to make
+  # its initial weights reproducible; Trainer#train also calls it with args.seed.
+  def self.set_seed(seed)
+    Torch.manual_seed(seed)
+    srand(seed)
+    seed
+  end
+
   # Convenience method: load model + tokenizer and prepare for training
   def self.from_pretrained(model_name, task: :sequence_classification, num_labels: 2)
     require "transformers-rb"

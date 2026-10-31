@@ -20,7 +20,7 @@ module Trainers
       targets = LoraUtils.find_target_modules(model, config.target_modules)
 
       if targets.empty?
-        raise "No Linear modules found matching target_modules: #{config.target_modules.inspect}. " \
+        raise AdapterError, "No Linear modules found matching target_modules: #{config.target_modules.inspect}. " \
               "Available modules: #{model.named_modules.map(&:first).join(', ')}"
       end
 
@@ -50,7 +50,7 @@ module Trainers
       end
       # :none — biases stay frozen (default)
 
-      puts "LoRA applied to #{targets.size} modules: #{targets.keys.join(', ')}"
+      Trainers.log(:info, "LoRA applied to #{targets.size} modules: #{targets.keys.join(', ')}")
       LoraUtils.print_trainable_parameters(model)
 
       model
@@ -63,7 +63,7 @@ module Trainers
       lora_modules.each do |name, mod|
         LoraUtils.replace_module(model, name, mod.to_linear)
       end
-      puts "Merged #{lora_modules.size} LoRA adapters into base model"
+      Trainers.log(:info, "Merged #{lora_modules.size} LoRA adapters into base model")
       model
     end
 

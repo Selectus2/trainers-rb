@@ -10,6 +10,20 @@ class PublicApiTest < Minitest::Test
                   Trainers.method(:from_pretrained)
   end
 
+  def test_seed_and_logger
+    assert_params [[:req, :seed]], Trainers.method(:set_seed)
+    assert_respond_to Trainers, :logger, MESSAGE
+    assert_respond_to Trainers, :logger=, MESSAGE
+    assert_params [], Trainers.method(:default_logger)
+  end
+
+  def test_error_hierarchy
+    %i[Error ConfigurationError AdapterError CheckpointError].each do |name|
+      assert Trainers.const_defined?(name, false), "#{MESSAGE}: Trainers::#{name} is missing"
+      assert_operator Trainers.const_get(name), :<=, Trainers::Error, MESSAGE
+    end
+  end
+
   def test_trainer
     assert_public_methods Trainers::Trainer,
                           %i[train evaluate predict save_model model args train_dataset eval_dataset
@@ -76,7 +90,7 @@ class PublicApiTest < Minitest::Test
   end
 
   def test_public_constants
-    %i[Trainer TrainingArguments TrainerCallback PrinterCallback EarlyStoppingCallback TrainerState
+    %i[Trainer TrainingArguments TrainerCallback PrinterCallback LoggingCallback EarlyStoppingCallback TrainerState
        TrainerControl LoraConfig LoraModel LoraLinear Dataset DataCollatorWithPadding DefaultDataCollator
        EvalPrediction SaveUtils].each do |name|
       assert Trainers.const_defined?(name, false), "#{MESSAGE}: Trainers::#{name} is missing"

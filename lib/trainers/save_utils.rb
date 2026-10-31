@@ -18,7 +18,7 @@ module Trainers
       model_path = File.join(output_dir, "model.safetensors")
       require "safetensors"
       Safetensors::Torch.save_file(tensors, model_path)
-      puts "Model saved to #{model_path}"
+      Trainers.log(:info, "Model saved to #{model_path}")
 
       # Save tokenizer
       if tokenizer
@@ -49,21 +49,20 @@ module Trainers
       end
 
       if lora_state.empty?
-        puts "No LoRA adapters found in model"
-        return
+        raise AdapterError, "No LoRA adapters found in model. Apply them with LoraModel.apply before saving."
       end
 
       adapter_path = File.join(output_dir, "adapter_model.safetensors")
       require "safetensors"
       Safetensors::Torch.save_file(lora_state, adapter_path)
-      puts "LoRA adapters saved to #{adapter_path} (#{lora_state.size} tensors)"
+      Trainers.log(:info, "LoRA adapters saved to #{adapter_path} (#{lora_state.size} tensors)")
 
       output_dir
     end
 
     def self.load_lora_adapters(model, input_dir)
       adapter_path = File.join(input_dir, "adapter_model.safetensors")
-      raise "Adapter file not found: #{adapter_path}" unless File.exist?(adapter_path)
+      raise AdapterError, "Adapter file not found: #{adapter_path}" unless File.exist?(adapter_path)
 
       require "safetensors"
       lora_state = Safetensors::Torch.load_file(adapter_path)
@@ -78,7 +77,7 @@ module Trainers
         end
       end
 
-      puts "LoRA adapters loaded from #{adapter_path}"
+      Trainers.log(:info, "LoRA adapters loaded from #{adapter_path}")
     end
   end
 end

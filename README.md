@@ -134,7 +134,7 @@ Trainers::LoraModel.load_adapters(model, "./lora-adapters")
 | `learning_rate` | `5e-5` | Peak learning rate for AdamW |
 | `weight_decay` | `0.0` | Weight decay (applied to non-bias, non-norm params) |
 | `max_grad_norm` | `1.0` | Max gradient norm for clipping |
-| `gradient_accumulation_steps` | `1` | Accumulate gradients over N steps |
+| `gradient_accumulation_steps` | `1` | Accumulate gradients over N batches per optimizer step |
 | `warmup_steps` | `0` | Linear warmup steps |
 | `warmup_ratio` | `0.0` | Warmup as fraction of total steps (alternative to warmup_steps) |
 | `lr_scheduler_type` | `:linear` | `:linear`, `:cosine`, or `:constant` |
@@ -142,11 +142,59 @@ Trainers::LoraModel.load_adapters(model, "./lora-adapters")
 | `eval_steps` | `nil` | Evaluate every N steps (when `eval_strategy: :steps`) |
 | `save_strategy` | `:epoch` | When to save: `:no`, `:epoch`, or `:steps` |
 | `save_total_limit` | `nil` | Keep only the last N checkpoints |
+| `save_steps` | `500` | Save a checkpoint every N steps (when `save_strategy: :steps`) |
 | `logging_steps` | `500` | Log every N steps |
-| `seed` | `42` | Random seed |
+| `seed` | `42` | Seeds Torch, Ruby's RNG and data shuffling at the start of `train`; `nil` disables seeding |
+| `dataloader_drop_last` | `false` | Skip the final batch when it is smaller than the batch size |
+| `label_names` | `["labels"]` | Batch keys that hold labels; the first is used for the built-in cross-entropy loss |
 | `no_mps` | `false` | Force CPU even if MPS is available |
 
+**A step is one optimizer update.** With `gradient_accumulation_steps: 4`, one step covers four batches, and `max_steps`, `global_step`, `logging_steps`, `eval_steps`, `save_steps`, `warmup_steps` and the learning-rate schedule all count optimizer updates. When an epoch's batch count is not a multiple of the accumulation steps, the last, shorter window still makes an update, with its loss averaged over the batches it contains, so no gradient carries into the next epoch.
+
 Invalid values, such as a negative learning rate, a zero batch size or an unknown `lr_scheduler_type`, raise `ArgumentError` when `TrainingArguments` is created.
+
+## Reproducibility
+
+`Trainer#train` seeds Torch, Ruby's global RNG and its own shuffling from `args.seed`. The model's initial weights are created before training starts, so seed those yourself:
+
+```ruby
+Trainers.set_seed(42)
+model, tokenizer = Trainers.from_pretrained("distilbert-base-uncased", num_labels: 2)
+```
+
+Two runs with the same seed, data and arguments produce identical loss curves on CPU. On Apple Silicon (MPS), some kernels are not deterministic, so expect small differences between runs.
+
+## Logging
+
+trainers-rb reports progress through `Trainers.logger`, which writes to `$stderr` at `INFO` by default. Nothing is written to stdout.
+
+```ruby
+Trainers.logger = Rails.logger                  # use your app's logger
+Trainers.logger.level = Logger::WARN            # only warnings and errors
+Trainers.logger = nil                           # completely silent
+```
+
+To print progress to stdout instead, add `Trainers::PrinterCallback.new` to `callbacks:`.
+
+## Errors
+
+Every error trainers-rb raises descends from `Trainers::Error`:
+
+| Error | Raised when |
+|---|---|
+| `Trainers::ConfigurationError` | The model has no trainable parameters, returns no loss and no labels are present, or the training data yields no batches |
+| `Trainers::AdapterError` | No module matches `target_modules`, an adapter file is missing, or `save_adapters` finds no adapters |
+| `Trainers::CheckpointError` | Reserved for checkpoint save and load errors |
+
+```ruby
+begin
+  trainer.train
+rescue Trainers::Error => e
+  # anything trainers-rb raised
+end
+```
+
+Invalid `TrainingArguments` values raise `ArgumentError`.
 
 ## Callbacks
 
@@ -286,11 +334,6 @@ trainers-rb adds the training layer that transformers-rb intentionally omits. Bo
 
 These are open correctness issues. They are tracked, and listed here so nobody discovers them the hard way:
 
-- **The learning-rate schedule is wrong with `gradient_accumulation_steps > 1`.** The scheduler is sized in micro-batches but stepped once per optimizer step, so it never decays fully. ([#12](https://github.com/Selectus2/trainers-rb/issues/12))
-- **`seed:` is never applied.** Runs are not reproducible. ([#13](https://github.com/Selectus2/trainers-rb/issues/13))
-- **`dataloader_drop_last:` and `label_names:` are accepted and ignored.** ([#14](https://github.com/Selectus2/trainers-rb/issues/14))
-- **Progress output goes to stdout through `puts`.** There is no logger to configure or silence. ([#15](https://github.com/Selectus2/trainers-rb/issues/15))
-- **`save_lora_adapters` returns `nil` instead of raising when a model has no adapters.** ([#16](https://github.com/Selectus2/trainers-rb/issues/16))
 - **A saved model cannot be loaded back.** No `config.json` is written. ([#17](https://github.com/Selectus2/trainers-rb/issues/17))
 - **Checkpoints cannot resume training.** Optimizer, scheduler and trainer state are not saved. ([#18](https://github.com/Selectus2/trainers-rb/issues/18))
 - **LoRA checkpoints save the full state dict** rather than just the adapters. ([#19](https://github.com/Selectus2/trainers-rb/issues/19))

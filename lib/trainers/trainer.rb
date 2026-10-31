@@ -25,25 +25,35 @@ module Trainers
       @state           = TrainerState.new
       @control         = TrainerControl.new
 
-      all_callbacks = [PrinterCallback.new] + callbacks
+      all_callbacks = [LoggingCallback.new] + callbacks
       @callback_handler = CallbackHandler.new(all_callbacks)
     end
 
     def train
       device = @args.resolved_device
+      apply_seed
       @model.to(device)
       @model.train
 
-      num_examples   = @train_dataset.size
-      batch_size     = @args.per_device_train_batch_size
-      steps_per_epoch = (num_examples.to_f / batch_size).ceil
-      total_steps    = steps_per_epoch * @args.num_train_epochs
+      batch_size        = @args.per_device_train_batch_size
+      accum             = @args.gradient_accumulation_steps
+      batches_per_epoch = num_batches(@train_dataset, batch_size)
+      if batches_per_epoch.zero?
+        raise ConfigurationError, "train_dataset yields no batches: #{@train_dataset.size} examples, " \
+                                  "batch size #{batch_size}, dataloader_drop_last #{@args.dataloader_drop_last}"
+      end
 
-      @state.max_steps       = total_steps
+      # One step is one optimizer update. The last accumulation window of an
+      # epoch may be shorter than gradient_accumulation_steps; it still steps.
+      steps_per_epoch = (batches_per_epoch.to_f / accum).ceil
+      total_steps     = steps_per_epoch * @args.num_train_epochs
+
+      @state.max_steps        = total_steps
       @state.num_train_epochs = @args.num_train_epochs
 
       @optimizer    = create_optimizer
       @lr_scheduler = create_scheduler(total_steps)
+      @optimizer.zero_grad
 
       @callback_handler.fire(:on_train_begin, @args, @state, @control)
 
@@ -52,38 +62,38 @@ module Trainers
         @callback_handler.fire(:on_epoch_begin, @args, @state, @control)
         @model.train
 
-        epoch_loss   = 0.0
-        epoch_steps  = 0
+        epoch_loss    = 0.0
+        epoch_batches = 0
 
-        each_batch(@train_dataset, batch_size, shuffle: true) do |batch|
-          @callback_handler.fire(:on_step_begin, @args, @state, @control)
+        each_batch(@train_dataset, batch_size, shuffle: true).with_index do |batch, index|
+          position     = index % accum
+          window_start = index - position
+          window_size  = [accum, batches_per_epoch - window_start].min
+
+          @callback_handler.fire(:on_step_begin, @args, @state, @control) if position.zero?
 
           batch = move_to_device(batch, device)
           loss  = compute_loss(batch)
 
-          scaled_loss = if @args.gradient_accumulation_steps > 1
-                          loss / @args.gradient_accumulation_steps
-                        else
-                          loss
-                        end
-
+          # Average the gradient over the micro-batches in this window
+          scaled_loss = window_size > 1 ? loss / window_size : loss
           scaled_loss.backward
 
-          epoch_loss  += loss.item
-          epoch_steps += 1
-          @state.global_step += 1
+          epoch_loss    += loss.item
+          epoch_batches += 1
 
-          if @state.global_step % @args.gradient_accumulation_steps == 0
-            clip_grad_norm!(@model.parameters, @args.max_grad_norm)
-            @optimizer.step
-            @lr_scheduler.step
-            @optimizer.zero_grad
-          end
+          next unless position == window_size - 1
+
+          clip_grad_norm!(@model.parameters, @args.max_grad_norm)
+          @optimizer.step
+          @lr_scheduler.step
+          @optimizer.zero_grad
+          @state.global_step += 1
 
           # Logging
           if should_log?
             logs = {
-              loss:          epoch_loss / epoch_steps,
+              loss:          epoch_loss / epoch_batches,
               learning_rate: current_lr,
               epoch:         @state.epoch
             }
@@ -109,11 +119,13 @@ module Trainers
           break if @control.should_training_stop || @control.should_epoch_stop
         end
 
-        # Epoch-level logging
-        epoch_avg_loss = epoch_steps > 0 ? epoch_loss / epoch_steps : 0.0
-        logs = { loss: epoch_avg_loss, learning_rate: current_lr, epoch: @state.epoch }
-        @state.log_history << logs.merge(step: @state.global_step)
-        @callback_handler.fire(:on_log, @args, @state, @control, logs: logs)
+        # Epoch-level logging, unless the last step of the epoch already logged
+        unless @state.log_history.last&.fetch(:step, nil) == @state.global_step
+          epoch_avg_loss = epoch_batches > 0 ? epoch_loss / epoch_batches : 0.0
+          logs = { loss: epoch_avg_loss, learning_rate: current_lr, epoch: @state.epoch }
+          @state.log_history << logs.merge(step: @state.global_step)
+          @callback_handler.fire(:on_log, @args, @state, @control, logs: logs)
+        end
 
         # Epoch-based evaluation
         if @args.eval_strategy == :epoch && @eval_dataset
@@ -151,7 +163,7 @@ module Trainers
       Torch.no_grad do
         each_batch(dataset, @args.per_device_eval_batch_size) do |batch|
           batch  = move_to_device(batch, device)
-          labels = batch.delete(:labels) || batch.delete("labels")
+          labels = pop_labels(batch).values.first
 
           output = forward(batch)
 
@@ -209,11 +221,12 @@ module Trainers
     private
 
     def compute_loss(batch)
-      labels = batch.delete(:labels) || batch.delete("labels")
+      label_values = pop_labels(batch)
+      labels       = label_values.values.first
 
       # Try passing labels to the model (some models compute loss internally)
       output = begin
-        forward(labels ? batch.merge(labels: labels) : batch)
+        forward(batch.merge(label_values))
       rescue => e
         # If the model doesn't support labels kwarg (e.g. transformers-rb Todo),
         # fall back to forward without labels + external loss
@@ -225,7 +238,7 @@ module Trainers
       end
 
       # Restore labels to batch for downstream use
-      batch[:labels] = labels if labels
+      batch.merge!(label_values)
 
       if output.respond_to?(:loss) && output.loss
         output.loss
@@ -233,7 +246,7 @@ module Trainers
         logits = output.respond_to?(:logits) ? output.logits : output
         Torch::NN::F.cross_entropy(logits, labels)
       else
-        raise "Model did not return a loss and no labels found in batch. " \
+        raise ConfigurationError, "Model did not return a loss and no labels found in batch. " \
               "Either pass labels in your dataset or use a model that computes loss."
       end
     end
@@ -268,18 +281,38 @@ module Trainers
       )
     end
 
-    def each_batch(dataset, batch_size, shuffle: false)
-      indices = (0...dataset.size).to_a
-      indices.shuffle! if shuffle
-
-      (0...dataset.size).step(batch_size) do |start|
-        batch_indices = indices[start, batch_size]
-        next if batch_indices.nil? || batch_indices.empty?
-
-        features = batch_indices.map { |i| dataset[i] }
-        batch = @data_collator.call(features)
-        yield batch
+    # Removes every key named in args.label_names (symbol or string) from the
+    # batch and returns them as { name_symbol => tensor }, in label_names order
+    def pop_labels(batch)
+      @args.label_names.each_with_object({}) do |name, labels|
+        value = batch.key?(name.to_sym) ? batch.delete(name.to_sym) : batch.delete(name.to_s)
+        labels[name.to_sym] = value unless value.nil?
       end
+    end
+
+    def num_batches(dataset, batch_size)
+      full, rest = dataset.size.divmod(batch_size)
+      rest.positive? && !@args.dataloader_drop_last ? full + 1 : full
+    end
+
+    def each_batch(dataset, batch_size, shuffle: false)
+      return enum_for(:each_batch, dataset, batch_size, shuffle: shuffle) unless block_given?
+
+      indices = (0...dataset.size).to_a
+      indices.shuffle!(random: @rng || Random.new) if shuffle
+
+      num_batches(dataset, batch_size).times do |i|
+        batch_indices = indices[i * batch_size, batch_size]
+        features = batch_indices.map { |j| dataset[j] }
+        yield @data_collator.call(features)
+      end
+    end
+
+    # Seeds Torch, Kernel#rand and the shuffle RNG from args.seed (nil skips)
+    def apply_seed
+      seed = @args.seed
+      @rng = seed.nil? ? Random.new : Random.new(seed)
+      Trainers.set_seed(seed) unless seed.nil?
     end
 
     def move_to_device(batch, device)
