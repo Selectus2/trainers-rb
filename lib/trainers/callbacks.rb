@@ -72,8 +72,11 @@ module Trainers
       puts message
     end
 
+    # Small floats such as learning rates (2e-5) would print as 0.0000
     def format_value(v)
-      v.is_a?(Float) ? format("%.4f", v) : v.to_s
+      return v.to_s unless v.is_a?(Float)
+
+      v.nonzero? && v.abs < 1e-3 ? format("%.3e", v) : format("%.4f", v)
     end
   end
 

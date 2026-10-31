@@ -79,6 +79,19 @@ class TinyLoraTarget < Torch::NN::Module
   end
 end
 
+# Stacked layers in a ModuleList, like DistilBERT's transformer.layer.0.attention.q_lin
+class TinyLayerStack < Torch::NN::Module
+  def initialize(dim = 8, layers = 2, num_labels = 2)
+    super()
+    @layer = Torch::NN::ModuleList.new(Array.new(layers) { TinyAttention.new(dim) })
+    @out   = Torch::NN::Linear.new(dim, num_labels)
+  end
+
+  def forward(x)
+    @out.call(@layer.reduce(x) { |h, block| block.call(h) })
+  end
+end
+
 module TestHelpers
   # Linearly separable 4-feature dataset of `size` rows
   def synthetic_dataset(size = 8)

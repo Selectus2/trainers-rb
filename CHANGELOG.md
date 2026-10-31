@@ -20,6 +20,9 @@
 
 - `dataloader_drop_last: true` skips the final partial batch in training, evaluation and prediction (#14). `train` raises `ConfigurationError` if that leaves no batches.
 - `label_names:` is honoured (#14). Every listed key is passed to the model, and the first is used for the built-in cross-entropy loss and `evaluate`.
+- `LoraModel.apply` works on models whose layers sit in a `ModuleList`, which covers every HuggingFace transformer, for example DistilBERT's `transformer.layer.0.attention.q_lin`. It used to raise `Could not find module part '0'`, because `ModuleList` stores its children in a Hash keyed by `"0"`, not in an Array.
+- When an epoch's last optimizer step was already logged, the end-of-epoch log no longer repeats it.
+- Learning rates and other floats below 0.001 are logged in scientific notation (`2.000e-05`), not as `0.0000`.
 
 ### Added
 

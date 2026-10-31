@@ -101,8 +101,8 @@ class GradientAccumulationTest < Minitest::Test
   def test_logging_steps_count_optimizer_steps
     _, counter = train(rows: 8, batch_size: 1, accum: 4, epochs: 1, logging_steps: 1)
 
-    # 2 optimizer steps + 1 epoch-end log
-    assert_equal 3, counter.logs
+    # 2 optimizer steps; the epoch-end log is skipped because step 2 just logged
+    assert_equal 2, counter.logs
   end
 
   def test_save_steps_count_optimizer_steps

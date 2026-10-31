@@ -130,4 +130,15 @@ class LoraTest < Minitest::Test
     apply_lora(target_modules: :all_linear)
     assert_equal %w[attn.query attn.value out], lora_modules.keys.sort
   end
+
+  # Regression: indexes into a ModuleList ("layer.0.query") raised AdapterError
+  def test_targets_inside_a_module_list
+    model = TinyLayerStack.new(DIM)
+    expected = model.call(@input)
+    apply_lora(model)
+
+    assert_equal %w[layer.0.query layer.0.value layer.1.query layer.1.value], lora_modules(model).keys.sort
+    assert Torch.allclose(expected, model.call(@input), atol: 1e-6)
+    assert_equal 4, model.named_parameters.count { |name, p| p.requires_grad && name.include?("lora_") } / 2
+  end
 end

@@ -30,22 +30,26 @@ module Trainers
 
       # Navigate to the parent module
       parts[0...-1].each do |part|
-        if part =~ /\A\d+\z/
-          # Numeric index — likely a ModuleList element
-          parent = parent.instance_variable_get(:@modules)[part.to_i]
-        else
-          parent = parent.instance_variable_get(:"@#{part}")
-        end
-
+        parent = child_module(parent, part)
         raise AdapterError, "Could not find module part '#{part}' in #{target_name}" unless parent
       end
 
       child_name = parts.last
-      if child_name =~ /\A\d+\z/
-        parent.instance_variable_get(:@modules)[child_name.to_i] = new_module
+      registered = parent.instance_variable_get(:@modules)
+      if registered&.key?(child_name)
+        registered[child_name] = new_module
       else
         parent.instance_variable_set(:"@#{child_name}", new_module)
       end
+    end
+
+    # ModuleList and add_module children live in @modules, a Hash keyed by
+    # name ("0", "1", ...); everything else is an instance variable.
+    def self.child_module(parent, name)
+      registered = parent.instance_variable_get(:@modules)
+      return registered[name] if registered&.key?(name)
+
+      parent.instance_variable_get(:"@#{name}") if name.match?(/\A[a-z_]\w*\z/i)
     end
 
     # Count total and trainable parameters

@@ -119,11 +119,13 @@ module Trainers
           break if @control.should_training_stop || @control.should_epoch_stop
         end
 
-        # Epoch-level logging
-        epoch_avg_loss = epoch_batches > 0 ? epoch_loss / epoch_batches : 0.0
-        logs = { loss: epoch_avg_loss, learning_rate: current_lr, epoch: @state.epoch }
-        @state.log_history << logs.merge(step: @state.global_step)
-        @callback_handler.fire(:on_log, @args, @state, @control, logs: logs)
+        # Epoch-level logging, unless the last step of the epoch already logged
+        unless @state.log_history.last&.fetch(:step, nil) == @state.global_step
+          epoch_avg_loss = epoch_batches > 0 ? epoch_loss / epoch_batches : 0.0
+          logs = { loss: epoch_avg_loss, learning_rate: current_lr, epoch: @state.epoch }
+          @state.log_history << logs.merge(step: @state.global_step)
+          @callback_handler.fire(:on_log, @args, @state, @control, logs: logs)
+        end
 
         # Epoch-based evaluation
         if @args.eval_strategy == :epoch && @eval_dataset

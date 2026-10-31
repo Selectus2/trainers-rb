@@ -61,6 +61,43 @@ class LoggingTest < Minitest::Test
     assert_match "Starting training", out
   end
 
+  # Regression: the epoch-end log repeated the last step's entry
+  def test_each_step_is_logged_once
+    Trainers.logger = nil
+    trainer = Trainers::Trainer.new(
+      model: TinyClassifier.new,
+      args: training_args(num_train_epochs: 2, per_device_train_batch_size: 4, logging_steps: 1),
+      train_dataset: synthetic_dataset(8)
+    )
+    trainer.train
+
+    steps = trainer.state.log_history.map { |entry| entry[:step] }
+    assert_equal [1, 2, 3, 4], steps
+  end
+
+  def test_epoch_log_still_fires_when_no_step_logged
+    Trainers.logger = nil
+    trainer = Trainers::Trainer.new(
+      model: TinyClassifier.new,
+      args: training_args(num_train_epochs: 2, per_device_train_batch_size: 4, logging_steps: 100),
+      train_dataset: synthetic_dataset(8)
+    )
+    trainer.train
+
+    assert_equal [2, 4], trainer.state.log_history.map { |entry| entry[:step] }
+  end
+
+  def test_small_learning_rates_are_not_printed_as_zero
+    Trainers.logger = nil
+    callback = Trainers::PrinterCallback.new
+    state = Trainers::TrainerState.new
+
+    out, = capture_io { callback.on_log(nil, state, nil, logs: { loss: 0.6823, learning_rate: 2.0e-5 }) }
+
+    assert_match "loss: 0.6823", out
+    assert_match "learning_rate: 2.000e-05", out
+  end
+
   private
 
   def run_training(model:, callbacks: [], **overrides)
