@@ -14,6 +14,18 @@ class TinyHeadClassifier < Torch::NN::Module
   end
 end
 
+# Ends the current epoch early at one step
+class EndEpochAtStep < Trainers::TrainerCallback
+  def initialize(step)
+    super()
+    @step = step
+  end
+
+  def on_step_end(args, state, control, **)
+    control.should_epoch_stop = true if state.global_step == @step
+  end
+end
+
 class StopAtStep < Trainers::TrainerCallback
   def initialize(step)
     super()
@@ -74,6 +86,25 @@ class CheckpointTest < Minitest::Test
     assert_equal [1, 4], [state["epochs_completed"], state["batches_done_in_epoch"]]
 
     resumed = train_run(TinyClassifier.new, resume_from_checkpoint: true)
+    reference.model.named_parameters.each do |name, param|
+      assert_equal param.to_a, resumed.model.named_parameters[name].to_a, name
+    end
+  end
+
+  # should_epoch_stop skips the rest of the epoch on purpose, so the
+  # checkpoint marks the epoch complete and the resumed run skips it too
+  def test_epoch_ended_early_is_saved_as_complete
+    Trainers.set_seed(1)
+    reference = train_run(TinyClassifier.new, callbacks: [EndEpochAtStep.new(2)], output_dir: File.join(@tmpdir, "reference"))
+
+    Trainers.set_seed(1)
+    train_run(TinyClassifier.new, callbacks: [EndEpochAtStep.new(2)], save_strategy: :epoch, stop_at: 2)
+    state = JSON.parse(File.read(File.join(@tmpdir, "checkpoint-2", "trainer_state.json")))
+    assert_equal [1, 0], [state["epochs_completed"], state["batches_done_in_epoch"]]
+
+    Trainers.set_seed(2)
+    resumed = train_run(TinyClassifier.new, callbacks: [EndEpochAtStep.new(2)], resume_from_checkpoint: true)
+    assert_equal reference.state.global_step, resumed.state.global_step
     reference.model.named_parameters.each do |name, param|
       assert_equal param.to_a, resumed.model.named_parameters[name].to_a, name
     end
@@ -225,9 +256,9 @@ class CheckpointTest < Minitest::Test
     end
   end
 
-  def train_run(model, stop_at: nil, **overrides)
+  def train_run(model, stop_at: nil, callbacks: [], **overrides)
     args = training_args(**RUN, **overrides.merge(output_dir: overrides.fetch(:output_dir, @tmpdir)))
-    callbacks = stop_at ? [StopAtStep.new(stop_at)] : []
+    callbacks += [StopAtStep.new(stop_at)] if stop_at
     trainer = Trainers::Trainer.new(model: model, args: args, train_dataset: synthetic_dataset(12), callbacks: callbacks)
     quietly { trainer.train }
     trainer

@@ -141,9 +141,11 @@ module Trainers
 
         # Epoch-based saving
         # A run stopped part-way through the epoch records where it stopped,
-        # counting batches skipped when it was resumed
+        # counting batches skipped when it was resumed. An epoch ended early
+        # with should_epoch_stop is complete: its other batches were skipped
+        # on purpose, and a resumed run must skip them too.
         if @args.save_strategy == :epoch
-          if batches_done == batches_per_epoch
+          if batches_done == batches_per_epoch || @control.should_epoch_stop
             save_checkpoint(epochs_completed: epoch + 1, batches_done_in_epoch: 0)
           else
             save_checkpoint(epochs_completed: epoch, batches_done_in_epoch: batches_done)
