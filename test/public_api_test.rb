@@ -8,6 +8,7 @@ class PublicApiTest < Minitest::Test
   def test_trainers_from_pretrained
     assert_params [[:req, :model_name], [:key, :task], [:key, :num_labels]],
                   Trainers.method(:from_pretrained)
+    assert_params [[:req, :model_dir]], Trainers.method(:load_pretrained)
   end
 
   def test_seed_and_logger
@@ -72,6 +73,7 @@ class PublicApiTest < Minitest::Test
                   Trainers::SaveUtils.method(:save_pretrained)
     assert_params [[:req, :model], [:req, :output_dir]], Trainers::SaveUtils.method(:save_lora_adapters)
     assert_params [[:req, :model], [:req, :input_dir]], Trainers::SaveUtils.method(:load_lora_adapters)
+    assert_params [[:req, :input_dir]], Trainers::SaveUtils.method(:load_pretrained)
   end
 
   def test_callback_hooks

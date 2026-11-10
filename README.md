@@ -86,6 +86,32 @@ trainer.train
 trainer.save_model("./my-model")
 ```
 
+## Saving and loading
+
+`save_model` writes a directory that trainers-rb, transformers-rb and Python transformers can all read:
+
+| File | Contents |
+|---|---|
+| `config.json` | The model's transformers config, with `architectures` and the label maps (`id2label`, `label2id`) |
+| `model.safetensors` | The weights |
+| `tokenizer.json` | The tokenizer, when one was passed to the `Trainer` |
+| `tokenizer_config.json` | The tokenizer class and its special tokens (for transformers-rb tokenizers) |
+| `training_args.json` | The `TrainingArguments` used, for your records. Nothing reads it back |
+
+Load it in a fresh process with `Trainers.load_pretrained`. It returns the model in eval mode and the tokenizer (`nil` if none was saved):
+
+```ruby
+model, tokenizer = Trainers.load_pretrained("./my-model")
+encoded = tokenizer.(["What a great film"], return_tensors: "pt")
+model.(input_ids: encoded[:input_ids], attention_mask: encoded[:attention_mask])[:logits]
+```
+
+In Python, `AutoModelForSequenceClassification.from_pretrained("./my-model")` and `AutoTokenizer.from_pretrained("./my-model")` load the same directory.
+
+`config.json` is written only for transformers-rb models. A plain `Torch::NN::Module` gets weights only and cannot be loaded with `load_pretrained`. Directories saved by trainers-rb before 0.3.0 have no `config.json`, so `load_pretrained` raises `Trainers::CheckpointError` for them.
+
+A model with unmerged LoRA adapters can't be loaded as a plain model. Merge it first with `LoraModel.merge`, or save only the adapters (see below).
+
 ## LoRA (Parameter-Efficient Fine-Tuning)
 
 Freeze 99% of parameters and train only small low-rank adapter matrices:
@@ -334,7 +360,6 @@ trainers-rb adds the training layer that transformers-rb intentionally omits. Bo
 
 These are open correctness issues. They are tracked, and listed here so nobody discovers them the hard way:
 
-- **A saved model cannot be loaded back.** No `config.json` is written. ([#17](https://github.com/Selectus2/trainers-rb/issues/17))
 - **Checkpoints cannot resume training.** Optimizer, scheduler and trainer state are not saved. ([#18](https://github.com/Selectus2/trainers-rb/issues/18))
 - **LoRA checkpoints save the full state dict** rather than just the adapters. ([#19](https://github.com/Selectus2/trainers-rb/issues/19))
 

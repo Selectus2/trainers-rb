@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased (0.3.0)
+
+### Added
+
+- **`Trainers.load_pretrained(dir)`** returns `[model, tokenizer]` from a directory written by `save_model` (#17). The model is in eval mode on the CPU. It raises `CheckpointError` when the directory has no `config.json`, or when the weights don't match the config. It raises `AdapterError` when the weights hold unmerged LoRA adapters.
+
+### Fixed
+
+- **`save_model` writes `config.json`** (#17), with `architectures` and the label maps, so the directory can be loaded again. Python transformers loads it too: `AutoModelForSequenceClassification.from_pretrained(dir)` gives logits within 3e-8 of Ruby's.
+- **`save_model` writes the tokenizer for transformers-rb tokenizers** (#17). It used to save `tokenizer.json` only for objects that respond to `save`, which ruled out `AutoTokenizer` results such as `DistilBertTokenizerFast`, so no tokenizer was ever written. It now saves the backend as `tokenizer.json`, plus `tokenizer_config.json` with the tokenizer class and special tokens.
+- `model.safetensors` carries the `"format" => "pt"` metadata that the transformers loaders in Ruby and Python check for.
+
 ## 0.2.0 (2026-10-31)
 
 **This release changes training results.** Runs that use `gradient_accumulation_steps > 1` now follow the intended learning-rate schedule. All runs now apply `seed:`, so data order is different from 0.1.x and reproducible. Expect different (better) final models than 0.1.x with the same arguments.

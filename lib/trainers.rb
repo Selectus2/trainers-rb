@@ -50,4 +50,9 @@ module Trainers
 
     [model, tokenizer]
   end
+
+  # Loads a directory written by Trainer#save_model. Returns [model, tokenizer].
+  def self.load_pretrained(model_dir)
+    SaveUtils.load_pretrained(model_dir)
+  end
 end
