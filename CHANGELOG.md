@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (0.3.0)
+## 0.3.0 (2026-11-10)
 
 **This release changes LoRA training results.** `LoraModel.apply` now keeps the task head trainable, as PEFT does. It used to freeze it at its random initial weights. Expect better LoRA models than 0.2.0 with the same arguments. Full fine-tunes are unchanged.
 
