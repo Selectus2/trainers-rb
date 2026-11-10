@@ -137,7 +137,7 @@ class EvaluateDeviceTest < Minitest::Test
   def test_evaluate_and_predict_move_the_model_to_the_device
     model = TinyClassifier.new
     moved = []
-    model.define_singleton_method(:to) { |device| moved << device.to_s; super(device) }
+    model.define_singleton_method(:to) { |device| moved << (device.respond_to?(:type) ? device.type : device.to_s); super(device) }
     data = synthetic_dataset(4)
     t = Trainers::Trainer.new(model: model, args: training_args, train_dataset: data, eval_dataset: data)
 
