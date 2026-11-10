@@ -8,6 +8,7 @@ class PublicApiTest < Minitest::Test
   def test_trainers_from_pretrained
     assert_params [[:req, :model_name], [:key, :task], [:key, :num_labels]],
                   Trainers.method(:from_pretrained)
+    assert_params [[:req, :model_dir]], Trainers.method(:load_pretrained)
   end
 
   def test_seed_and_logger
@@ -45,6 +46,7 @@ class PublicApiTest < Minitest::Test
       gradient_accumulation_steps warmup_steps warmup_ratio lr_scheduler_type
       eval_strategy eval_steps save_strategy save_steps save_total_limit
       logging_steps logging_first_step seed device no_mps dataloader_drop_last label_names
+      resume_from_checkpoint
     ]
     missing = expected_keys - Trainers::TrainingArguments::DEFAULTS.keys
     assert_empty missing, "#{MESSAGE}: DEFAULTS lost #{missing.inspect}"
@@ -62,9 +64,9 @@ class PublicApiTest < Minitest::Test
   end
 
   def test_lora_config
-    expected = %i[r lora_alpha lora_dropout target_modules bias task_type]
+    expected = %i[r lora_alpha lora_dropout target_modules bias task_type modules_to_save]
     assert_empty expected - Trainers::LoraConfig::DEFAULTS.keys, MESSAGE
-    assert_public_methods Trainers::LoraConfig, expected + %i[scaling to_h]
+    assert_public_methods Trainers::LoraConfig, expected + %i[scaling to_h resolved_modules_to_save]
   end
 
   def test_save_utils
@@ -72,6 +74,7 @@ class PublicApiTest < Minitest::Test
                   Trainers::SaveUtils.method(:save_pretrained)
     assert_params [[:req, :model], [:req, :output_dir]], Trainers::SaveUtils.method(:save_lora_adapters)
     assert_params [[:req, :model], [:req, :input_dir]], Trainers::SaveUtils.method(:load_lora_adapters)
+    assert_params [[:req, :input_dir]], Trainers::SaveUtils.method(:load_pretrained)
   end
 
   def test_callback_hooks

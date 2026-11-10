@@ -7,7 +7,8 @@ module Trainers
     # 1. Finds all Linear layers matching config.target_modules
     # 2. Replaces each with a LoraLinear that freezes the original weight
     # 3. Freezes all base model parameters
-    # 4. Only LoRA A/B matrices remain trainable
+    # 4. LoRA A/B matrices stay trainable, and so do the modules named by
+    #    config.modules_to_save (by default the task head for task_type)
     #
     # Returns the modified model (in-place).
     def self.apply(model, config)
@@ -50,11 +51,29 @@ module Trainers
       end
       # :none — biases stay frozen (default)
 
+      unfreeze_modules_to_save(model, config)
+
       Trainers.log(:info, "LoRA applied to #{targets.size} modules: #{targets.keys.join(', ')}")
       LoraUtils.print_trainable_parameters(model)
 
       model
     end
+
+    # Keeps the task head trainable, as PEFT does. Matches the last segment of
+    # each module name, so "classifier" matches "classifier" but not "distilbert.classifier_x".
+    def self.unfreeze_modules_to_save(model, config)
+      names = config.resolved_modules_to_save
+      return if names.empty?
+
+      matched = model.named_modules.select { |name, _| names.include?(name.split(".").last) }
+      if matched.empty? && !config.modules_to_save.nil?
+        raise AdapterError, "No modules found matching modules_to_save: #{names.inspect}"
+      end
+
+      matched.each_value { |mod| mod.parameters.each { |p| p.requires_grad = true } }
+      Trainers.log(:info, "Training in full: #{matched.keys.join(', ')}") unless matched.empty?
+    end
+    private_class_method :unfreeze_modules_to_save
 
     # Merge all LoRA weights back into base weights (for inference).
     # Each LoraLinear is replaced by a plain Linear with the merged weights.

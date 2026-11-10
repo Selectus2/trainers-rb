@@ -86,9 +86,35 @@ trainer.train
 trainer.save_model("./my-model")
 ```
 
+## Saving and loading
+
+`save_model` writes a directory that trainers-rb, transformers-rb and Python transformers can all read:
+
+| File | Contents |
+|---|---|
+| `config.json` | The model's transformers config, with `architectures` and the label maps (`id2label`, `label2id`) |
+| `model.safetensors` | The weights |
+| `tokenizer.json` | The tokenizer, when one was passed to the `Trainer` |
+| `tokenizer_config.json` | The tokenizer class and its special tokens (for transformers-rb tokenizers) |
+| `training_args.json` | The `TrainingArguments` used, for your records. Nothing reads it back |
+
+Load it in a fresh process with `Trainers.load_pretrained`. It returns the model in eval mode and the tokenizer (`nil` if none was saved):
+
+```ruby
+model, tokenizer = Trainers.load_pretrained("./my-model")
+encoded = tokenizer.(["What a great film"], return_tensors: "pt")
+model.(input_ids: encoded[:input_ids], attention_mask: encoded[:attention_mask])[:logits]
+```
+
+In Python, `AutoModelForSequenceClassification.from_pretrained("./my-model")` and `AutoTokenizer.from_pretrained("./my-model")` load the same directory.
+
+`config.json` is written only for transformers-rb models. A plain `Torch::NN::Module` gets weights only and cannot be loaded with `load_pretrained`. Directories saved by trainers-rb before 0.3.0 have no `config.json`, so `load_pretrained` raises `Trainers::CheckpointError` for them.
+
+A model with unmerged LoRA adapters can't be loaded as a plain model. Merge it first with `LoraModel.merge`, or save only the adapters (see below).
+
 ## LoRA (Parameter-Efficient Fine-Tuning)
 
-Freeze 99% of parameters and train only small low-rank adapter matrices:
+Freeze the base model and train small low-rank adapter matrices, plus the task head:
 
 ```ruby
 # Apply LoRA to specific layers
@@ -96,24 +122,37 @@ config = Trainers::LoraConfig.new(
   r:              8,         # rank
   lora_alpha:     16,        # scaling factor
   lora_dropout:   0.1,
-  target_modules: ["query", "value"],  # which Linear layers to adapt
-  bias:           :none      # :none, :all, or :lora_only
+  target_modules: ["q_lin", "v_lin"],  # which Linear layers to adapt (DistilBERT names)
+  bias:           :none,     # :none, :all, or :lora_only
+  task_type:      :sequence_classification
+  # modules_to_save: ["classifier"]  # defaults to the task head for task_type
 )
 
 Trainers::LoraModel.apply(model, config)
+# => Training in full: pre_classifier, classifier
 # => LoRA applied to 12 modules: ...
-# => trainable params: 294,912 || all params: 66,955,010 || trainable%: 0.4404%
+# => trainable params: 739,586 || all params: 67,102,466 || trainable%: 1.1022%
 
 # Train as usual
 trainer.train
 
-# Save just the adapters (tiny files)
+# Save just the adapters and the task head (small files)
 Trainers::LoraModel.save_adapters(model, "./lora-adapters")
 
 # Or merge into base model for inference
 Trainers::LoraModel.merge(model)
 trainer.save_model("./merged-model")
 ```
+
+The task head is trained in full, as in PEFT. `from_pretrained` initialises it randomly, so it has to learn along with the adapters. `modules_to_save` defaults to the head for `task_type`:
+
+| `task_type` | Kept trainable |
+|---|---|
+| `:sequence_classification` | `pre_classifier`, `classifier`, `score` |
+| `:token_classification` | `classifier` |
+| `:question_answering` | `qa_outputs` |
+
+Names match the last part of a module's name. Pass `modules_to_save: []` to freeze the head, or your own list for other models.
 
 ### Loading saved LoRA adapters
 
@@ -122,6 +161,33 @@ model, tokenizer = Trainers.from_pretrained("distilbert-base-uncased", num_label
 Trainers::LoraModel.apply(model, config)
 Trainers::LoraModel.load_adapters(model, "./lora-adapters")
 ```
+
+Use the same base model and `LoraConfig` as in training. The adapter file holds every trained weight, including the task head, so the loaded model predicts exactly as the trained one did.
+
+## Checkpoints and resuming
+
+With `save_strategy: :steps` or `:epoch`, the trainer writes `checkpoint-N` directories in `output_dir`, where N is the step. Each one can resume training:
+
+```ruby
+args = Trainers::TrainingArguments.new(
+  output_dir: "./output",
+  resume_from_checkpoint: true   # the latest checkpoint-N, or pass a directory
+)
+Trainers::Trainer.new(model: model, args: args, ...).train
+```
+
+| File | Full fine-tune | LoRA run |
+|---|---|---|
+| `model.safetensors`, `config.json`, tokenizer files | yes | no |
+| `adapter_model.safetensors` (adapters and task head) | no | yes |
+| `optimizer.safetensors` (AdamW moments for the trainable weights) | yes | yes |
+| `trainer_state.json` (step, epoch position, seed, log history) | yes | yes |
+
+A LoRA checkpoint doesn't hold the frozen base model. On DistilBERT it is about 9 MB, against 268 MB for the full weights. To resume a LoRA run, load the same base model and apply the same `LoraConfig` before calling `train`.
+
+Resuming restores the weights, the optimizer, the learning-rate schedule, the step count and the data order. The rest of the run uses the same batches and learning rates as an uninterrupted one. With `dropout` the results still differ slightly: torch-rb can't save Torch's random-number state, so the trainer reseeds it from `seed` and the step, and dropout masks after the resume differ from the original run's. Without dropout the resumed run matches exactly.
+
+Resume with the same `seed`, dataset and arguments as the original run. The trainer logs a warning when the seed or the total step count differs. Checkpoints written before 0.3.0 hold weights only; resuming from one raises `Trainers::CheckpointError`.
 
 ## Training Arguments
 
@@ -143,6 +209,7 @@ Trainers::LoraModel.load_adapters(model, "./lora-adapters")
 | `save_strategy` | `:epoch` | When to save: `:no`, `:epoch`, or `:steps` |
 | `save_total_limit` | `nil` | Keep only the last N checkpoints |
 | `save_steps` | `500` | Save a checkpoint every N steps (when `save_strategy: :steps`) |
+| `resume_from_checkpoint` | `nil` | A checkpoint directory to resume from, or `true` for the latest in `output_dir` |
 | `logging_steps` | `500` | Log every N steps |
 | `seed` | `42` | Seeds Torch, Ruby's RNG and data shuffling at the start of `train`; `nil` disables seeding |
 | `dataloader_drop_last` | `false` | Skip the final batch when it is smaller than the batch size |
@@ -330,23 +397,11 @@ trainers-rb
 
 trainers-rb adds the training layer that transformers-rb intentionally omits. Both gems call into the same LibTorch C++ kernels for the actual computation.
 
-## Known limitations
-
-These are open correctness issues. They are tracked, and listed here so nobody discovers them the hard way:
-
-- **A saved model cannot be loaded back.** No `config.json` is written. ([#17](https://github.com/Selectus2/trainers-rb/issues/17))
-- **Checkpoints cannot resume training.** Optimizer, scheduler and trainer state are not saved. ([#18](https://github.com/Selectus2/trainers-rb/issues/18))
-- **LoRA checkpoints save the full state dict** rather than just the adapters. ([#19](https://github.com/Selectus2/trainers-rb/issues/19))
-
 ## Roadmap
 
-- [ ] More model architectures in transformers-rb (GPT-2, Llama for text generation)
-- [ ] Mixed precision training (fp16/bf16)
-- [ ] Gradient checkpointing for memory efficiency
-- [ ] Dataset streaming for large datasets
-- [ ] Distributed training
-- [ ] Integration with ONNX export for deployment
-- [ ] QLoRA (quantized base model + LoRA)
+What comes next is chosen from real fine-tunes. If something was missing in yours, [open an issue](https://github.com/Selectus2/trainers-rb/issues): a report from a user outranks this list. Candidates are collected in [#20](https://github.com/Selectus2/trainers-rb/issues/20).
+
+**Not planned, at any version:** custom kernels, quantisation (including QLoRA), multi-GPU and distributed training, RL methods (GRPO, DPO), vision or speech models, GGUF export. torch-rb can't reach most of them from Ruby.
 
 ## Contributing
 

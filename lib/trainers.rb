@@ -15,6 +15,7 @@ require_relative "trainers/optimization/optimizer"
 require_relative "trainers/optimization/scheduler"
 require_relative "trainers/callbacks"
 require_relative "trainers/save_utils"
+require_relative "trainers/checkpoint"
 require_relative "trainers/lora/lora_config"
 require_relative "trainers/lora/lora_linear"
 require_relative "trainers/lora/lora_utils"
@@ -49,5 +50,10 @@ module Trainers
     tokenizer = Transformers::AutoTokenizer.from_pretrained(model_name)
 
     [model, tokenizer]
+  end
+
+  # Loads a directory written by Trainer#save_model. Returns [model, tokenizer].
+  def self.load_pretrained(model_dir)
+    SaveUtils.load_pretrained(model_dir)
   end
 end
