@@ -23,7 +23,6 @@
 - **CUDA is used when available** (#28). `resolved_device` only ever chose MPS or the CPU. The order is now an explicit `device:`, then CUDA, then MPS, then the CPU.
 - **`DataCollatorWithPadding` truncates rows longer than `max_length`** (#29). Rows given as Arrays raised `ArgumentError: negative argument`. Rows given as Tensors were already truncated.
 - **`DataCollatorWithPadding` pads Tensor labels with `-100`**, the same as Array labels. They used to be padded with `0`, a real class, so padding counted towards the loss.
-- **An epoch-end checkpoint written after a mid-epoch stop records where training stopped.** When a callback or `max_steps` ended training part-way through an epoch, the checkpoint claimed the whole epoch was done, and resuming skipped its remaining batches.
 - `predict` no longer passes labels to the model, and puts the model back in training mode afterwards, as `evaluate` does.
 
 ### Changed
