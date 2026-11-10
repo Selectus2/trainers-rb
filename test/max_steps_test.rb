@@ -61,6 +61,28 @@ class MaxStepsTest < Minitest::Test
     assert_equal [1, 2], [state["epochs_completed"], state["batches_done_in_epoch"]]
   end
 
+  # Epochs ended early by a callback don't eat into the step budget
+  def test_epochs_ended_early_still_reach_max_steps
+    trainer = train_run(max_steps: 6, callbacks: [EndEpochAt.new(2)])
+    assert_equal 6, trainer.state.global_step
+    assert_in_delta 0.0, trainer.state.log_history.last[:learning_rate], 1e-9
+  end
+
+  def test_resume_after_an_epoch_ended_early_reaches_max_steps
+    Trainers.set_seed(1)
+    reference = train_run(max_steps: 6, callbacks: [EndEpochAt.new(2)], output_dir: File.join(@tmpdir, "reference"))
+
+    Trainers.set_seed(1)
+    train_run(max_steps: 6, save_strategy: :epoch, callbacks: [EndEpochAt.new(2), StopAt.new(2)])
+    Trainers.set_seed(2)
+    resumed = train_run(max_steps: 6, callbacks: [EndEpochAt.new(2)], resume_from_checkpoint: true)
+
+    assert_equal 6, resumed.state.global_step
+    reference.model.named_parameters.each do |name, param|
+      assert_equal param.to_a, resumed.model.named_parameters[name].to_a, name
+    end
+  end
+
   def test_validation
     [0, -1, 2.5, "3"].each do |value|
       error = assert_raises(ArgumentError) { training_args(max_steps: value) }
@@ -78,6 +100,17 @@ class MaxStepsTest < Minitest::Test
 
     def on_step_end(args, state, control, **)
       control.should_training_stop = true if state.global_step >= @step
+    end
+  end
+
+  class EndEpochAt < Trainers::TrainerCallback
+    def initialize(step)
+      super()
+      @step = step
+    end
+
+    def on_step_end(args, state, control, **)
+      control.should_epoch_stop = true if state.global_step == @step
     end
   end
 

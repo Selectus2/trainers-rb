@@ -164,3 +164,42 @@ class EvaluateDeviceTest < Minitest::Test
   end
 end
 
+# A model whose forward takes no label keyword
+class NoLabelsClassifier < Torch::NN::Module
+  def initialize
+    super()
+    @fc = Torch::NN::Linear.new(4, 2)
+  end
+
+  def forward(input:)
+    @fc.call(input)
+  end
+end
+
+# Raises an ArgumentError of its own, which must not be swallowed
+class BrokenClassifier < NoLabelsClassifier
+  def forward(input:)
+    raise ArgumentError, "wrong shape"
+  end
+end
+
+# Copilot review of #36: models without a labels: keyword evaluate and train,
+# with the loss computed outside the model
+class LabelFreeModelTest < Minitest::Test
+  def test_trains_and_evaluates_a_model_without_a_labels_keyword
+    data = synthetic_dataset(8)
+    Trainers.set_seed(0)
+    t = Trainers::Trainer.new(model: NoLabelsClassifier.new, args: training_args(num_train_epochs: 5, learning_rate: 0.1),
+                              train_dataset: data, eval_dataset: data)
+    before = quietly { t.evaluate }[:eval_loss]
+    quietly { t.train }
+    assert_operator quietly { t.evaluate }[:eval_loss], :<, before
+  end
+
+  def test_other_argument_errors_are_raised
+    data = synthetic_dataset(4)
+    t = Trainers::Trainer.new(model: BrokenClassifier.new, args: training_args, train_dataset: data, eval_dataset: data)
+    error = assert_raises(ArgumentError) { quietly { t.evaluate } }
+    assert_equal "wrong shape", error.message
+  end
+end

@@ -60,11 +60,12 @@ module Trainers
     end
 
     # A new Dataset when the block returns a Hash for every row. Any other
-    # result gives an Array, as Enumerable#map does.
+    # result gives an Array, as Enumerable#map does. The block gets a copy of
+    # each row, so row.delete(:label) leaves this Dataset unchanged.
     def map(&block)
       return enum_for(:map) unless block
 
-      results = @data.map(&block)
+      results = @data.map { |row| block.call(row.is_a?(Hash) ? row.dup : row) }
       results.all?(Hash) ? self.class.new(results) : results
     end
 

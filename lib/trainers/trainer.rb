@@ -65,9 +65,12 @@ module Trainers
 
       @callback_handler.fire(:on_train_begin, @args, @state, @control)
 
-      num_epochs.times do |epoch|
+      # With max_steps, epochs continue until the step budget is spent, even
+      # when callbacks end some epochs early with should_epoch_stop
+      (0..).each do |epoch|
+        break if @args.max_steps.nil? && epoch >= num_epochs
         next if epoch < start_epoch
-        break if @state.global_step >= total_steps # resumed from the final checkpoint
+        break if @state.global_step >= total_steps # done, or resumed from the final checkpoint
 
         @state.epoch = epoch + 1
         @callback_handler.fire(:on_epoch_begin, @args, @state, @control)
@@ -283,6 +286,12 @@ module Trainers
         # transformers-rb 0.2.0's BertForTokenClassification computes its loss
         # with an unqualified CrossEntropyLoss and raises whenever it gets labels
         raise unless e.name == :CrossEntropyLoss
+
+        forward(batch)
+      rescue ArgumentError => e
+        # A model whose forward takes no label keyword: run it without labels
+        # and compute the loss outside it
+        raise unless e.message.match?(/unknown keywords?:/) && label_values.keys.any? { |key| e.message.include?(":#{key}") }
 
         forward(batch)
       rescue => e

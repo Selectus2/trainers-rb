@@ -10,16 +10,17 @@
 
 - **Datasets from files** (#30): `Dataset.from_jsonl(path)` and `Dataset.from_csv(path, **csv_options)`. A malformed JSONL line raises `ConfigurationError` naming the file and line.
 - **`Dataset#split(test_size:, seed: 42)`** returns `[train, test]`, shuffled with `Random.new(seed)`. `test_size` is a fraction or a row count.
-- **`Dataset#map` and `Dataset#filter`** return new Datasets. `map` returns an Array, as before, when the block doesn't return Hashes. `select` still returns an Array.
+- **`Dataset#map` and `Dataset#filter`** return new Datasets, and `map` passes the block a copy of each row, so `row.delete(:label)` leaves the source Dataset unchanged. `map` returns an Array, as before, when the block doesn't return Hashes. `select` still returns an Array.
 - **`Dataset#tokenize(tokenizer, column: :text, max_length: 512, keep: false)`** (#31) adds `input_ids` and `attention_mask` (and `token_type_ids` for text pairs), truncated to `max_length`. It takes a transformers-rb tokenizer or a `Tokenizers::Tokenizer`, and restores the latter's truncation setting afterwards.
 - **`Trainers.from_pretrained(labels:)`** (#32) sets `num_labels`, `id2label` and `label2id`, so `config.json`, `load_pretrained` and Python see the class names. A `num_labels:` that contradicts `labels:` raises `ArgumentError`.
 - **A log line when training starts** (#35) with the device, dtype, number of examples, epochs, optimizer steps, batch and accumulation, and how many parameters are trainable.
 - `from_pretrained(task: :question_answering)` warns that transformers-rb 0.2.0 can't compute the question-answering loss.
-- **`max_steps:`** (#34) trains for that many optimizer steps, overriding `num_train_epochs`. The learning-rate schedule and `warmup_ratio` use it as the total.
+- **`max_steps:`** (#34) trains for that many optimizer steps, overriding `num_train_epochs`. Epochs continue until the budget is spent, including when callbacks end some early with `should_epoch_stop`. The learning-rate schedule and `warmup_ratio` use it as the total.
 
 ### Fixed
 
 - **Token classification evaluates and predicts** (#27). `evaluate` crashed on per-token logits `[batch, seq, labels]`, and `predict` crashed when batches were padded to different lengths. Both now pad per-batch results to the longest batch with `-100` before joining them, so `compute_metrics` gets predictions and labels of matching shape. Training BERT for token classification also failed: transformers-rb 0.2.0's `BertForTokenClassification` raises `NameError` (`CrossEntropyLoss`) whenever it gets labels. The Trainer now runs it without labels and computes the loss itself.
+- **Models whose `forward` takes no label keyword train and evaluate again.** `evaluate` passed the labels in and raised `ArgumentError: unknown keyword: :labels`. The Trainer now retries without them and computes the loss itself. Training gets the same fallback.
 - **`evaluate` uses the model's own loss** when it returns one, instead of always recomputing cross-entropy over the logits. The fallback cross-entropy flattens per-token logits and ignores `-100` labels.
 - **`eval_loss` is averaged over rows, not batches.** A short last batch used to count as much as a full one, so `eval_loss` can differ slightly from 0.3.0 when the eval set isn't a multiple of `per_device_eval_batch_size`.
 - **CUDA is used when available** (#28). `resolved_device` only ever chose MPS or the CPU. The order is now an explicit `device:`, then CUDA, then MPS, then the CPU.

@@ -68,6 +68,14 @@ class DatasetTest < Minitest::Test
     assert_equal [{ id: 0 }, { id: 1 }, { id: 2 }], ds.to_a, "map must not mutate the receiver"
   end
 
+  # The README's own transform deletes a key; the source keeps it
+  def test_map_blocks_get_copies_of_the_rows
+    ds = Trainers::Dataset.new([{ text: "good", label: 1 }])
+    mapped = ds.map { |row| row.merge(labels: row.delete(:label)) }
+    assert_equal [{ text: "good", labels: 1 }], mapped.to_a
+    assert_equal [{ text: "good", label: 1 }], ds.to_a
+  end
+
   def test_filter_returns_a_dataset_and_select_an_array
     ds = numbered(5)
     assert_instance_of Trainers::Dataset, ds.filter { |row| row[:id].even? }
