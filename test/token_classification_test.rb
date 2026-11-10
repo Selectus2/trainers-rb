@@ -1,0 +1,205 @@
+require_relative "test_helper"
+
+# A per-token classifier: logits of shape [batch, seq, labels]
+class TinyTagger < Torch::NN::Module
+  def initialize(vocab = 10, num_labels = 3)
+    super()
+    @embed = Torch::NN::Embedding.new(vocab, num_labels)
+  end
+
+  def forward(input_ids:, attention_mask: nil, labels: nil)
+    @embed.call(input_ids)
+  end
+end
+
+# Returns its own loss, like transformers-rb's BertForTokenClassification
+class TinyTaggerWithLoss < TinyTagger
+  Output = Struct.new(:loss, :logits, keyword_init: true)
+
+  def forward(input_ids:, attention_mask: nil, labels: nil)
+    logits = super
+    loss   = labels && Torch::NN::F.cross_entropy(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
+    Output.new(loss: loss, logits: logits)
+  end
+end
+
+# Issue #27: token classification trains, evaluates and predicts, with
+# batches padded to different lengths
+class TokenClassificationTest < Minitest::Test
+  PadTokenizer = Struct.new(:pad_token_id)
+
+  def setup
+    @tmpdir = Dir.mktmpdir
+  end
+
+  def teardown
+    FileUtils.rm_rf(@tmpdir)
+  end
+
+  # Rows of 1, 2, 3, 4 and 5 tokens; batch 2 gives batches of length 2, 4 and 5
+  def dataset
+    rows = Array.new(5) do |i|
+      ids = Array.new(i + 1) { |j| (i + j) % 10 }
+      { input_ids: ids, attention_mask: [1] * ids.size, labels: ids.map { |id| id % 3 } }
+    end
+    Trainers::Dataset.new(rows)
+  end
+
+  def trainer(model, **options)
+    Trainers::Trainer.new(
+      model: model, args: training_args(num_train_epochs: 2, per_device_train_batch_size: 2,
+                                        per_device_eval_batch_size: 2, learning_rate: 0.1),
+      train_dataset: dataset, eval_dataset: dataset,
+      data_collator: Trainers::DataCollatorWithPadding.new(tokenizer: PadTokenizer.new(0)), **options
+    )
+  end
+
+  def test_trains_evaluates_and_predicts
+    [TinyTagger, TinyTaggerWithLoss].each do |klass|
+      Trainers.set_seed(1)
+      t = trainer(klass.new)
+      before = quietly { t.evaluate }[:eval_loss]
+      quietly { t.train }
+      after = quietly { t.evaluate }[:eval_loss]
+      assert_operator after, :<, before, klass.name
+
+      preds = t.predict(dataset)
+      assert_equal [5, 5, 3], preds.shape, klass.name
+    end
+  end
+
+  # transformers-rb 0.2.0's BertForTokenClassification raises NameError
+  # (CrossEntropyLoss) when given labels; the Trainer computes the loss instead
+  def test_transformers_bert_token_classification
+    require "transformers-rb"
+    Trainers.set_seed(0)
+    config = Transformers::Bert::BertConfig.new(vocab_size: 10, hidden_size: 8, num_hidden_layers: 1,
+                                                num_attention_heads: 2, intermediate_size: 16, num_labels: 3)
+    t = trainer(Transformers::Bert::BertForTokenClassification.new(config))
+    before = quietly { t.evaluate }[:eval_loss]
+    quietly { t.train }
+
+    assert_operator quietly { t.evaluate }[:eval_loss], :<, before
+    assert_equal [5, 5, 3], t.predict(dataset).shape
+  end
+
+  def test_predictions_and_labels_line_up_for_compute_metrics
+    received = nil
+    metrics = lambda do |pred|
+      received = pred
+      labels = pred.label_ids
+      mask   = labels.ne(-100)
+      { accuracy: pred.predictions.argmax(-1).eq(labels).logical_and(mask).sum.item.to_f / mask.sum.item }
+    end
+    result = quietly { trainer(TinyTagger.new, compute_metrics: metrics).evaluate }
+
+    assert_equal [5, 5, 3], received.predictions.shape
+    assert_equal [5, 5], received.label_ids.shape
+    # The one-token row is padded with -100 after its label
+    assert_equal [0, -100, -100, -100, -100], received.label_ids[0].to_a
+    assert_includes 0.0..1.0, result[:accuracy]
+  end
+
+  def test_padded_tokens_do_not_count_towards_the_loss
+    model = TinyTagger.new
+    rows  = [{ input_ids: [1, 2], labels: [0, 1] }, { input_ids: [3], labels: [2] }]
+    batch = Trainers::DataCollatorWithPadding.new(tokenizer: PadTokenizer.new(0)).call(rows)
+    logits = model.(input_ids: batch[:input_ids])
+    expected = Torch::NN::F.cross_entropy(
+      Torch.stack([logits[0][0], logits[0][1], logits[1][0]]), Torch.tensor([0, 1, 2])
+    )
+
+    t = trainer(model)
+    loss = t.send(:loss_for, logits, logits, batch[:labels])
+    assert_in_delta expected.item, loss.item, 1e-6
+  end
+end
+
+# Issue #27: eval_loss weights each batch by its size
+class EvalLossWeightingTest < Minitest::Test
+  def test_a_short_last_batch_counts_for_its_rows_only
+    model = TinyClassifier.new
+    data  = synthetic_dataset(5)
+    args  = training_args(per_device_eval_batch_size: 2)
+    t     = Trainers::Trainer.new(model: model, args: args, train_dataset: data, eval_dataset: data)
+
+    inputs = Torch.tensor(data.map { |row| row[:input] })
+    labels = Torch.tensor(data.map { |row| row[:labels] })
+    expected = Torch.no_grad { Torch::NN::F.cross_entropy(model.(input: inputs), labels) }
+
+    assert_in_delta expected.item, quietly { t.evaluate }[:eval_loss], 1e-6
+  end
+end
+
+# Found by the 0.4.0 dogfood run: evaluate and predict before train crashed
+# on MPS ("Passed CPU tensor to MPS op"), as only train moved the model
+class EvaluateDeviceTest < Minitest::Test
+  def test_evaluate_and_predict_move_the_model_to_the_device
+    model = TinyClassifier.new
+    moved = []
+    model.define_singleton_method(:to) { |device| moved << (device.respond_to?(:type) ? device.type : device.to_s); super(device) }
+    data = synthetic_dataset(4)
+    t = Trainers::Trainer.new(model: model, args: training_args, train_dataset: data, eval_dataset: data)
+
+    quietly { t.evaluate }
+    t.predict(data)
+    assert_equal %w[cpu cpu], moved
+  end
+
+  # Found by the same run: activations piled up until MPS ran out of memory,
+  # because Ruby's GC can't see LibTorch's memory. Each batch now collects.
+  def test_each_batch_collects_garbage
+    data = synthetic_dataset(6)
+    t = Trainers::Trainer.new(model: TinyClassifier.new, args: training_args(per_device_train_batch_size: 2,
+                              per_device_eval_batch_size: 2, num_train_epochs: 1), train_dataset: data, eval_dataset: data)
+    collections = 0
+    t.define_singleton_method(:release_memory) { collections += 1; super() }
+
+    quietly { t.train }
+    assert_equal 3, collections
+    quietly { t.evaluate }
+    assert_equal 6, collections
+    t.predict(data)
+    assert_equal 9, collections
+  end
+end
+
+# A model whose forward takes no label keyword
+class NoLabelsClassifier < Torch::NN::Module
+  def initialize
+    super()
+    @fc = Torch::NN::Linear.new(4, 2)
+  end
+
+  def forward(input:)
+    @fc.call(input)
+  end
+end
+
+# Raises an ArgumentError of its own, which must not be swallowed
+class BrokenClassifier < NoLabelsClassifier
+  def forward(input:)
+    raise ArgumentError, "wrong shape"
+  end
+end
+
+# Copilot review of #36: models without a labels: keyword evaluate and train,
+# with the loss computed outside the model
+class LabelFreeModelTest < Minitest::Test
+  def test_trains_and_evaluates_a_model_without_a_labels_keyword
+    data = synthetic_dataset(8)
+    Trainers.set_seed(0)
+    t = Trainers::Trainer.new(model: NoLabelsClassifier.new, args: training_args(num_train_epochs: 5, learning_rate: 0.1),
+                              train_dataset: data, eval_dataset: data)
+    before = quietly { t.evaluate }[:eval_loss]
+    quietly { t.train }
+    assert_operator quietly { t.evaluate }[:eval_loss], :<, before
+  end
+
+  def test_other_argument_errors_are_raised
+    data = synthetic_dataset(4)
+    t = Trainers::Trainer.new(model: BrokenClassifier.new, args: training_args, train_dataset: data, eval_dataset: data)
+    error = assert_raises(ArgumentError) { quietly { t.evaluate } }
+    assert_equal "wrong shape", error.message
+  end
+end

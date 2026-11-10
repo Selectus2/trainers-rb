@@ -42,38 +42,22 @@ module Trainers
 
     private
 
+    # Pads, or truncates to max_length, each sequence of Integers
     def pad_and_stack(key, sequences)
-      max_len = compute_max_length(sequences.map(&:length))
-
-      pad_value = if key.to_s.include?("input_id")
-                    pad_token_id
-                  elsif key.to_s.include?("attention_mask")
-                    0
-                  elsif key.to_s.include?("label")
-                    -100
-                  else
-                    0
-                  end
+      max_len   = compute_max_length(sequences.map(&:length))
+      pad_value = pad_value_for(key)
 
       padded = sequences.map do |seq|
-        padded_seq = seq + [pad_value] * (max_len - seq.length)
-        padded_seq
+        seq = seq.first(max_len)
+        seq + [pad_value] * (max_len - seq.length)
       end
 
-      dtype = key.to_s.include?("attention_mask") ? :int64 : :int64
-      Torch.tensor(padded, dtype: dtype)
+      Torch.tensor(padded, dtype: :int64)
     end
 
     def pad_and_stack_tensors(key, tensors)
-      max_len = compute_max_length(tensors.map { |t| t.size(0) })
-
-      pad_value = if key.to_s.include?("input_id")
-                    pad_token_id
-                  elsif key.to_s.include?("attention_mask")
-                    0
-                  else
-                    0
-                  end
+      max_len   = compute_max_length(tensors.map { |t| t.size(0) })
+      pad_value = pad_value_for(key)
 
       padded = tensors.map do |t|
         if t.size(0) < max_len
@@ -85,6 +69,18 @@ module Trainers
       end
 
       Torch.stack(padded)
+    end
+
+    # Labels pad with -100, which cross-entropy ignores
+    def pad_value_for(key)
+      name = key.to_s
+      if name.include?("input_id")
+        pad_token_id
+      elsif name.include?("label")
+        -100
+      else
+        0
+      end
     end
 
     def compute_max_length(lengths)

@@ -30,6 +30,7 @@ Gem::Specification.new do |spec|
   spec.add_dependency "safetensors",     ">= 0.1.1"
   spec.add_dependency "tokenizers",      ">= 0.5.3"
   spec.add_dependency "logger",          ">= 1.5"
+  spec.add_dependency "csv",             ">= 3.2"
 
   spec.add_development_dependency "rake",     "~> 13.0"
   spec.add_development_dependency "minitest", "~> 6.0"

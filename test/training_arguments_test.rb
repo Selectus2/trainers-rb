@@ -75,6 +75,20 @@ class TrainingArgumentsTest < Minitest::Test
     assert_equal :constant, args.lr_scheduler_type
   end
 
+  # Issue #28
+  def test_device_prefers_cuda_then_mps_then_cpu
+    with_available(cuda: true, mps: true) { assert_equal "cuda", Trainers::TrainingArguments.new.resolved_device.type }
+    with_available(cuda: false, mps: true) { assert_equal "mps", Trainers::TrainingArguments.new.resolved_device.type }
+    with_available(cuda: false, mps: true) { assert_equal "cpu", Trainers::TrainingArguments.new(no_mps: true).resolved_device.type }
+    with_available(cuda: false, mps: false) { assert_equal "cpu", Trainers::TrainingArguments.new.resolved_device.type }
+  end
+
+  def test_explicit_device_wins
+    with_available(cuda: true, mps: true) do
+      assert_equal "cpu", Trainers::TrainingArguments.new(device: Torch.device("cpu")).resolved_device.type
+    end
+  end
+
   private
 
   def assert_rejected(key, value, expected)
@@ -82,5 +96,15 @@ class TrainingArgumentsTest < Minitest::Test
       Trainers::TrainingArguments.new(key => value)
     end
     assert_equal "#{key} must be #{expected}, got #{value.inspect}", error.message
+  end
+
+  # Replaces the CUDA and MPS availability checks for the block
+  def with_available(cuda:, mps:)
+    checks = { Torch::CUDA => cuda, Torch::Backends::MPS => mps }
+    originals = checks.keys.to_h { |mod| [mod, mod.method(:available?)] }
+    checks.each { |mod, value| mod.define_singleton_method(:available?) { value } }
+    yield
+  ensure
+    originals.each { |mod, original| mod.define_singleton_method(:available?, original) }
   end
 end

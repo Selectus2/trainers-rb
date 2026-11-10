@@ -6,7 +6,7 @@ class PublicApiTest < Minitest::Test
   MESSAGE = "public API changed — was this intentional? update this test and the CHANGELOG"
 
   def test_trainers_from_pretrained
-    assert_params [[:req, :model_name], [:key, :task], [:key, :num_labels]],
+    assert_params [[:req, :model_name], [:key, :task], [:key, :num_labels], [:key, :labels]],
                   Trainers.method(:from_pretrained)
     assert_params [[:req, :model_dir]], Trainers.method(:load_pretrained)
   end
@@ -46,7 +46,7 @@ class PublicApiTest < Minitest::Test
       gradient_accumulation_steps warmup_steps warmup_ratio lr_scheduler_type
       eval_strategy eval_steps save_strategy save_steps save_total_limit
       logging_steps logging_first_step seed device no_mps dataloader_drop_last label_names
-      resume_from_checkpoint
+      resume_from_checkpoint max_steps
     ]
     missing = expected_keys - Trainers::TrainingArguments::DEFAULTS.keys
     assert_empty missing, "#{MESSAGE}: DEFAULTS lost #{missing.inspect}"
@@ -66,7 +66,17 @@ class PublicApiTest < Minitest::Test
   def test_lora_config
     expected = %i[r lora_alpha lora_dropout target_modules bias task_type modules_to_save]
     assert_empty expected - Trainers::LoraConfig::DEFAULTS.keys, MESSAGE
-    assert_public_methods Trainers::LoraConfig, expected + %i[scaling to_h resolved_modules_to_save]
+    assert_public_methods Trainers::LoraConfig, expected + %i[scaling to_h resolved_modules_to_save resolved_target_modules]
+    assert_params [[:req, :model]], Trainers::LoraConfig.instance_method(:resolved_target_modules)
+  end
+
+  def test_dataset
+    assert_public_methods Trainers::Dataset, %i[data [] size length each map filter split tokenize]
+    assert_params [[:req, :path]], Trainers::Dataset.method(:from_jsonl)
+    assert_params [[:req, :path], [:keyrest, :csv_options]], Trainers::Dataset.method(:from_csv)
+    assert_params [[:keyreq, :test_size], [:key, :seed]], Trainers::Dataset.instance_method(:split)
+    assert_params [[:req, :tokenizer], [:key, :column], [:key, :max_length], [:key, :keep]],
+                  Trainers::Dataset.instance_method(:tokenize)
   end
 
   def test_save_utils

@@ -18,11 +18,13 @@ module Trainers
       model.parameters.each { |p| p.requires_grad = false }
 
       # Find and replace target modules
-      targets = LoraUtils.find_target_modules(model, config.target_modules)
+      # The per-architecture defaults are exact names, so they never fall back to substrings
+      target_modules, source = config.resolved_target_modules(model)
+      targets = LoraUtils.find_target_modules(model, target_modules, fallback: source != :model_type)
 
       if targets.empty?
-        raise AdapterError, "No Linear modules found matching target_modules: #{config.target_modules.inspect}. " \
-              "Available modules: #{model.named_modules.map(&:first).join(', ')}"
+        raise AdapterError, "No Linear modules found matching target_modules: #{target_modules.inspect}. " \
+              "Linear modules: #{LoraUtils.linear_names(model).first(20).join(', ')}"
       end
 
       targets.each do |name, linear|
@@ -53,7 +55,8 @@ module Trainers
 
       unfreeze_modules_to_save(model, config)
 
-      Trainers.log(:info, "LoRA applied to #{targets.size} modules: #{targets.keys.join(', ')}")
+      Trainers.log(:info, "LoRA target_modules #{target_modules.inspect}#{' (default)' unless source == :given} " \
+                          "applied to #{targets.size} modules: #{targets.keys.join(', ')}")
       LoraUtils.print_trainable_parameters(model)
 
       model

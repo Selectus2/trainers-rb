@@ -42,23 +42,19 @@ For Linux, and for running the tests, see [CONTRIBUTING.md](CONTRIBUTING.md).
 ```ruby
 require "trainers-rb"
 
-# Load a pre-trained model and tokenizer
+# Load a pre-trained model and tokenizer. labels: names the classes in id
+# order; they are saved in config.json.
 model, tokenizer = Trainers.from_pretrained(
   "distilbert-base-uncased",
   task: :sequence_classification,
-  num_labels: 2
+  labels: %w[negative positive]
 )
 
-# Prepare your dataset
-train_data = texts.map.with_index do |text, i|
-  encoded = tokenizer.(text, truncation: true, max_length: 128)
-  {
-    input_ids:      encoded["input_ids"],
-    attention_mask: encoded["attention_mask"],
-    labels:         labels[i]
-  }
-end
-train_dataset = Trainers::Dataset.new(train_data)
+# reviews.jsonl: {"text": "A gripping film.", "label": 1} on each line
+dataset = Trainers::Dataset.from_jsonl("reviews.jsonl")
+                           .map { |row| row.merge(labels: row.delete(:label)) }
+                           .tokenize(tokenizer, column: :text, max_length: 128)
+train_dataset, val_dataset = dataset.split(test_size: 0.1, seed: 42)
 
 # Configure and train
 args = Trainers::TrainingArguments.new(
@@ -122,7 +118,7 @@ config = Trainers::LoraConfig.new(
   r:              8,         # rank
   lora_alpha:     16,        # scaling factor
   lora_dropout:   0.1,
-  target_modules: ["q_lin", "v_lin"],  # which Linear layers to adapt (DistilBERT names)
+  # target_modules: ["q_lin", "v_lin"],  # defaults to the attention query and value layers
   bias:           :none,     # :none, :all, or :lora_only
   task_type:      :sequence_classification
   # modules_to_save: ["classifier"]  # defaults to the task head for task_type
@@ -130,7 +126,7 @@ config = Trainers::LoraConfig.new(
 
 Trainers::LoraModel.apply(model, config)
 # => Training in full: pre_classifier, classifier
-# => LoRA applied to 12 modules: ...
+# => LoRA target_modules ["q_lin", "v_lin"] (default) applied to 12 modules: ...
 # => trainable params: 739,586 || all params: 67,102,466 || trainable%: 1.1022%
 
 # Train as usual
@@ -153,6 +149,19 @@ The task head is trained in full, as in PEFT. `from_pretrained` initialises it r
 | `:question_answering` | `qa_outputs` |
 
 Names match the last part of a module's name. Pass `modules_to_save: []` to freeze the head, or your own list for other models.
+
+`target_modules` defaults to the attention query and value layers of the model's `config.model_type`:
+
+| `model_type` | Default `target_modules` |
+|---|---|
+| `bert`, `xlm-roberta` | `query`, `value` |
+| `distilbert` | `q_lin`, `v_lin` |
+| `deberta-v2` | `query_proj`, `value_proj` |
+| `mpnet` | `q`, `v` |
+
+Any other `model_type` needs `target_modules:`. Models without a transformers config default to `query` and `value`. Pass `:all_linear` to adapt every Linear layer.
+
+A target matches a module when it is the module's full name or the last part of it, as in PEFT: `"query"` matches `attention.self.query` but not `pos_query_proj`. A target that matches nothing that way still matches by substring, with a deprecation warning. Substring matching ends in 0.5.0.
 
 ### Loading saved LoRA adapters
 
@@ -195,6 +204,7 @@ Resume with the same `seed`, dataset and arguments as the original run. The trai
 |----------|---------|-------------|
 | `output_dir` | `"./output"` | Directory for checkpoints and saved models |
 | `num_train_epochs` | `3` | Number of training epochs |
+| `max_steps` | `nil` | Number of optimizer steps to train for. Overrides `num_train_epochs` when set |
 | `per_device_train_batch_size` | `8` | Training batch size |
 | `per_device_eval_batch_size` | `8` | Evaluation batch size |
 | `learning_rate` | `5e-5` | Peak learning rate for AdamW |
@@ -330,15 +340,33 @@ args = Trainers::TrainingArguments.new(lr_scheduler_type: :constant, warmup_step
 
 ### Dataset
 
-Wrap an array of hashes:
+Rows are Hashes with Symbol keys. Load them from a file, or wrap an Array:
 
 ```ruby
-data = [
-  { input_ids: [101, 2023, 2003], attention_mask: [1, 1, 1], labels: 1 },
-  { input_ids: [101, 2919, 2143], attention_mask: [1, 1, 1], labels: 0 },
-]
-dataset = Trainers::Dataset.new(data)
+dataset = Trainers::Dataset.from_jsonl("train.jsonl")      # one JSON object per line
+dataset = Trainers::Dataset.from_csv("train.csv")          # header row gives the keys
+dataset = Trainers::Dataset.from_csv("train.tsv", col_sep: "\t", converters: :numeric)
+dataset = Trainers::Dataset.new([{ text: "A gripping film.", labels: 1 }])
 ```
+
+CSV values are Strings unless you pass `converters: :numeric`. Other options go to Ruby's `CSV`.
+
+```ruby
+# A new Dataset with each row replaced. A block that doesn't return Hashes
+# gives an Array, as Enumerable#map does.
+dataset = dataset.map { |row| row.merge(labels: Integer(row[:label])) }
+dataset = dataset.filter { |row| row[:text].size > 10 }  # select returns an Array
+
+# Shuffled with Random.new(seed): the same seed gives the same split
+train, test = dataset.split(test_size: 0.2, seed: 42)    # or a row count: test_size: 500
+
+# input_ids and attention_mask, truncated to max_length tokens. The text
+# column is dropped unless keep: true.
+dataset = dataset.tokenize(tokenizer, column: :text, max_length: 256)
+dataset = dataset.tokenize(tokenizer, column: [:premise, :hypothesis])  # text pairs
+```
+
+`tokenize` takes a transformers-rb tokenizer or a `Tokenizers::Tokenizer`.
 
 ### Data Collators
 
@@ -354,32 +382,61 @@ Default collator (no padding, expects uniform-length inputs):
 collator = Trainers::DefaultDataCollator.new
 ```
 
-## Supported Tasks
+## Support
 
-trainers-rb works with any `Torch::NN::Module`. The `Trainers.from_pretrained` convenience method supports these transformers-rb model classes:
+### Models and tasks
 
-| Task | Model class |
-|------|-------------|
-| `:sequence_classification` | `AutoModelForSequenceClassification` |
-| `:token_classification` | `AutoModelForTokenClassification` |
-| `:question_answering` | `AutoModelForQuestionAnswering` |
+trainers-rb trains any `Torch::NN::Module` whose `forward` takes the batch's keys. `Trainers.from_pretrained` loads transformers-rb models through its `AutoModelFor*` classes, which cover these architectures:
 
-You can also use any custom model:
+<!-- architectures:start -->
+| `model_type` | Sequence classification | Token classification | Question answering | Default LoRA targets |
+|---|---|---|---|---|
+| `bert` | ✓ | ✓ | – | `query`, `value` |
+| `deberta-v2` | ✓ | – | – | `query_proj`, `value_proj` |
+| `distilbert` | ✓ | – | ✗ no loss | `q_lin`, `v_lin` |
+| `mpnet` | – | – | – | `q`, `v` |
+| `xlm-roberta` | ✓ | – | – | `query`, `value` |
+<!-- architectures:end -->
+
+This table is checked against transformers-rb by the test suite. **Question answering can't be trained yet:** transformers-rb 0.2.0's `DistilBertForQuestionAnswering` raises `Todo` when given `start_positions`, so there is no loss. transformers-rb also has heads that its `AutoModelFor*` classes don't reach, such as `MPNetForSequenceClassification`. Build those directly with their config and pass them to `Trainer`:
 
 ```ruby
 trainer = Trainers::Trainer.new(model: my_custom_model, args: args, ...)
 ```
 
-## Device Support
+### Platforms
 
-trainers-rb auto-detects the best available device:
+| | Tested in CI | Hand-tested | Not supported |
+|---|---|---|---|
+| Ruby | 3.3, 3.4, 4.0 | | 3.2 and older |
+| torch-rb | 0.17.1, 0.27 | | older than 0.17.1 |
+| OS | Ubuntu 24.04, macOS 15 (Apple Silicon) | macOS 27 | Windows (untested) |
+| CPU | ✓ | ✓ | |
+| MPS (Apple Silicon GPU) | | DistilBERT-base with LoRA, Apple M3 Pro | |
+| CUDA (NVIDIA GPU) | | | Untested: chosen automatically, but nobody has run it yet |
+| Multiple GPUs | | | Not planned |
 
-- **CPU** — always available
-- **MPS** — Apple Silicon GPU, used automatically when available
+Reports for other hardware are welcome as issues, with the "Training on" log line.
+
+### Devices
+
+trainers-rb picks the first available device, in this order:
+
+- **CUDA**: NVIDIA GPU
+- **MPS**: Apple Silicon GPU, skipped with `no_mps: true`
+- **CPU**: always available
+
+The first log line of a run shows what it runs on. For DistilBERT with LoRA on an Apple M3 Pro:
+
+```
+Training on mps (float32): 9,596 examples, 1 epoch, 600 optimizer steps (batch 16 x accumulation 1), 739,586 of 67,102,466 parameters trainable (1.10%)
+```
+
+That run, on 10,662 movie-review sentences ([rotten_tomatoes](https://www.cs.cornell.edu/people/pabo/movie-review-data/)) with 1,066 held out, reached 82.8% accuracy in 74 seconds. A full fine-tune reached 83.6% in 121 seconds.
 
 ```ruby
 # Force CPU
-args = Trainers::TrainingArguments.new(no_mps: true)
+args = Trainers::TrainingArguments.new(device: Torch.device("cpu"))
 
 # Or set explicitly
 args = Trainers::TrainingArguments.new(device: Torch.device("mps"))
@@ -399,7 +456,7 @@ trainers-rb adds the training layer that transformers-rb intentionally omits. Bo
 
 ## Roadmap
 
-What comes next is chosen from real fine-tunes. If something was missing in yours, [open an issue](https://github.com/Selectus2/trainers-rb/issues): a report from a user outranks this list. Candidates are collected in [#20](https://github.com/Selectus2/trainers-rb/issues/20).
+What comes next is chosen from real fine-tunes. If something was missing in yours, [open an issue](https://github.com/Selectus2/trainers-rb/issues): a report from a user outranks this list. Planned work is tracked in the [milestones](https://github.com/Selectus2/trainers-rb/milestones).
 
 **Not planned, at any version:** custom kernels, quantisation (including QLoRA), multi-GPU and distributed training, RL methods (GRPO, DPO), vision or speech models, GGUF export. torch-rb can't reach most of them from Ruby.
 

@@ -5,6 +5,7 @@ module Trainers
     DEFAULTS = {
       output_dir:                    "./output",
       num_train_epochs:              3,
+      max_steps:                     nil,      # optimizer steps; overrides num_train_epochs when set
       per_device_train_batch_size:   8,
       per_device_eval_batch_size:    8,
       learning_rate:                 5e-5,
@@ -56,10 +57,14 @@ module Trainers
       validate!
     end
 
+    # The device training runs on: device: when given, otherwise CUDA, then
+    # MPS (unless no_mps:), then the CPU
     def resolved_device
       return @device if @device
 
-      if !@no_mps && defined?(Torch::Backends::MPS) && Torch::Backends::MPS.available?
+      if Torch::CUDA.available?
+        Torch.device("cuda")
+      elsif !@no_mps && defined?(Torch::Backends::MPS) && Torch::Backends::MPS.available?
         Torch.device("mps")
       else
         Torch.device("cpu")
@@ -88,6 +93,7 @@ module Trainers
       end
       check(:warmup_steps, "a non-negative Integer") { |v| v.is_a?(Integer) && !v.negative? }
       check(:warmup_ratio, "a number between 0 and 1") { |v| v.is_a?(Numeric) && v.between?(0, 1) }
+      check(:max_steps, "nil or a positive Integer") { |v| v.nil? || (v.is_a?(Integer) && v.positive?) }
       check(:eval_steps, "nil or a positive Integer") { |v| v.nil? || (v.is_a?(Integer) && v.positive?) }
       check(:seed, "nil or a non-negative Integer") { |v| v.nil? || (v.is_a?(Integer) && !v.negative?) }
       check(:resume_from_checkpoint, "nil, true or a checkpoint directory String") { |v| v.nil? || v == true || v.is_a?(String) }
