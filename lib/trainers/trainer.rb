@@ -54,10 +54,13 @@ module Trainers
       @optimizer    = create_optimizer
       @lr_scheduler = create_scheduler(total_steps)
       @optimizer.zero_grad
+      start_epoch, skip_batches = resume_from_checkpoint
 
       @callback_handler.fire(:on_train_begin, @args, @state, @control)
 
       @args.num_train_epochs.times do |epoch|
+        next if epoch < start_epoch
+
         @state.epoch = epoch + 1
         @callback_handler.fire(:on_epoch_begin, @args, @state, @control)
         @model.train
@@ -65,7 +68,8 @@ module Trainers
         epoch_loss    = 0.0
         epoch_batches = 0
 
-        each_batch(@train_dataset, batch_size, shuffle: true).with_index do |batch, index|
+        skip = epoch == start_epoch ? skip_batches : 0
+        each_batch(@train_dataset, batch_size, shuffle: true, skip: skip) do |batch, index|
           position     = index % accum
           window_start = index - position
           window_size  = [accum, batches_per_epoch - window_start].min
@@ -111,7 +115,7 @@ module Trainers
           # Step-based saving
           if @args.save_strategy == :steps && @args.save_steps &&
              @state.global_step % @args.save_steps == 0
-            save_checkpoint
+            save_checkpoint(epochs_completed: epoch, batches_done_in_epoch: index + 1)
             @callback_handler.fire(:on_save, @args, @state, @control)
           end
 
@@ -135,7 +139,7 @@ module Trainers
 
         # Epoch-based saving
         if @args.save_strategy == :epoch
-          save_checkpoint
+          save_checkpoint(epochs_completed: epoch + 1, batches_done_in_epoch: 0)
           @callback_handler.fire(:on_save, @args, @state, @control)
         end
 
@@ -295,16 +299,20 @@ module Trainers
       rest.positive? && !@args.dataloader_drop_last ? full + 1 : full
     end
 
-    def each_batch(dataset, batch_size, shuffle: false)
-      return enum_for(:each_batch, dataset, batch_size, shuffle: shuffle) unless block_given?
+    # Yields each collated batch and its index. Batches before skip are passed
+    # over without collating them, which is how a resumed epoch catches up.
+    def each_batch(dataset, batch_size, shuffle: false, skip: 0)
+      return enum_for(:each_batch, dataset, batch_size, shuffle: shuffle, skip: skip) unless block_given?
 
       indices = (0...dataset.size).to_a
       indices.shuffle!(random: @rng || Random.new) if shuffle
 
       num_batches(dataset, batch_size).times do |i|
+        next if i < skip
+
         batch_indices = indices[i * batch_size, batch_size]
         features = batch_indices.map { |j| dataset[j] }
-        yield @data_collator.call(features)
+        yield @data_collator.call(features), i
       end
     end
 
@@ -352,10 +360,76 @@ module Trainers
       @state.global_step % @args.logging_steps == 0
     end
 
-    def save_checkpoint
-      dir = File.join(@args.output_dir, "checkpoint-#{@state.global_step}")
-      save_model(dir)
+    # A full fine-tune checkpoint holds the model as save_model writes it; a
+    # LoRA checkpoint holds only the adapters and other trainable weights.
+    # Both add the optimizer and trainer state needed to resume.
+    def save_checkpoint(position)
+      dir  = File.join(@args.output_dir, "checkpoint-#{@state.global_step}")
+      lora = lora_model?
+      if lora
+        SaveUtils.save_lora_adapters(@model, dir)
+      else
+        save_model(dir)
+      end
+      Checkpoint.save(dir, model: @model, optimizer: @optimizer, state: @state,
+                           position: position, seed: @args.seed, lora: lora)
       cleanup_checkpoints if @args.save_total_limit
+    end
+
+    def lora_model?
+      @model.named_modules.any? { |_, mod| mod.is_a?(LoraLinear) }
+    end
+
+    # Restores weights, optimizer, scheduler, step counters and data order from
+    # args.resume_from_checkpoint. Returns [epochs to skip, batches to skip in
+    # the first resumed epoch]; [0, 0] when not resuming.
+    def resume_from_checkpoint
+      setting = @args.resume_from_checkpoint
+      return [0, 0] unless setting
+
+      dir = setting == true ? Checkpoint.latest(@args.output_dir) : setting
+      if dir.nil?
+        raise CheckpointError, "resume_from_checkpoint is true, but #{@args.output_dir} has no checkpoint-N directory"
+      end
+      data = Checkpoint.read(dir)
+
+      if data[:lora]
+        unless lora_model?
+          raise CheckpointError, "#{dir} is a LoRA checkpoint. Apply LoRA to the base model with the same " \
+                                 "LoraConfig before resuming."
+        end
+        SaveUtils.load_lora_adapters(@model, dir)
+      else
+        raise CheckpointError, "#{dir} is a full checkpoint, but the model has LoRA adapters" if lora_model?
+
+        SaveUtils.load_weights(@model, File.join(dir, SaveUtils::WEIGHTS_FILE))
+      end
+      Checkpoint.restore_optimizer(dir, data, model: @model, optimizer: @optimizer)
+
+      @state.global_step           = data[:global_step]
+      @state.log_history           = data[:log_history]
+      @state.best_metric           = data[:best_metric]
+      @state.best_model_checkpoint = data[:best_model_checkpoint]
+      @lr_scheduler.step(@state.global_step)
+
+      if data[:max_steps] != @state.max_steps
+        Trainers.log(:warn, "#{dir} was written by a run of #{data[:max_steps]} steps; this run has " \
+                            "#{@state.max_steps}, so the learning-rate schedule differs from the original")
+      end
+      if @args.seed.nil? || @args.seed != data[:seed]
+        Trainers.log(:warn, "seed is #{@args.seed.inspect}, but #{dir} was written with seed #{data[:seed].inspect}; " \
+                            "the resumed data order differs from the original run")
+      end
+
+      # Replay the shuffles of the epochs already done, so the shuffle RNG is
+      # where the original run left it. Torch's RNG cannot be saved by
+      # torch-rb, so it is reseeded from the seed and step instead.
+      data[:epochs_completed].times { (0...@train_dataset.size).to_a.shuffle!(random: @rng) }
+      Torch.manual_seed(@args.seed + @state.global_step) unless @args.seed.nil?
+
+      Trainers.log(:info, "Resumed from #{dir} at step #{@state.global_step} " \
+                          "(epoch #{data[:epochs_completed] + 1}, batch #{data[:batches_done_in_epoch]})")
+      [data[:epochs_completed], data[:batches_done_in_epoch]]
     end
 
     def cleanup_checkpoints

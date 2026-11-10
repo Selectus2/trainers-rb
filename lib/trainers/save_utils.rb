@@ -65,6 +65,18 @@ module Trainers
       end
 
       model = model_class.new(config_class.new(**config_hash))
+      load_weights(model, weights_path)
+      model.eval
+
+      [model, load_tokenizer(input_dir)]
+    end
+
+    # Internal: loads model.safetensors into an existing model. Used by
+    # load_pretrained and by Trainer when resuming a full fine-tune.
+    def self.load_weights(model, weights_path)
+      require "safetensors"
+      raise CheckpointError, "No #{File.basename(weights_path)} in #{File.dirname(weights_path)}" unless File.exist?(weights_path)
+
       state = Safetensors::Torch.load_file(weights_path)
       if state.keys.any? { |key| key.end_with?(".lora_A", ".lora_B") }
         raise AdapterError, "#{weights_path} holds unmerged LoRA adapters. Merge them with LoraModel.merge " \
@@ -73,10 +85,10 @@ module Trainers
 
       # torch-rb's state_dict leaves out non-persistent buffers such as
       # position_ids, but its load_state_dict is strict and expects them.
-      # They are rebuilt by the constructor, so take them from the new model.
+      # They are rebuilt by the constructor, so take them from the model.
       missing_params = model.named_parameters.keys - state.keys
       unless missing_params.empty?
-        raise CheckpointError, "#{weights_path} is missing weights for #{architecture}: #{missing_params.first(5).join(', ')}"
+        raise CheckpointError, "#{weights_path} is missing weights for #{model.class}: #{missing_params.first(5).join(', ')}"
       end
       model.named_modules.each do |name, mod|
         mod.named_buffers(prefix: name.empty? ? "" : "#{name}.").each { |key, buffer| state[key] ||= buffer }
@@ -85,11 +97,9 @@ module Trainers
       begin
         Torch.no_grad { model.load_state_dict(state) }
       rescue StandardError => e
-        raise CheckpointError, "#{weights_path} does not match #{architecture}: #{e.message}"
+        raise CheckpointError, "#{weights_path} does not match #{model.class}: #{e.message}"
       end
-      model.eval
-
-      [model, load_tokenizer(input_dir)]
+      model
     end
 
     # Internal: config.json from the model's transformers config, with
@@ -154,6 +164,11 @@ module Trainers
     end
     private_class_method :save_config, :save_tokenizer, :load_tokenizer, :transformers_class
 
+    ADAPTER_FILE = "adapter_model.safetensors"
+
+    # Writes the LoRA A/B matrices and every other trainable parameter, such
+    # as the task head kept by modules_to_save, so the adapters reproduce the
+    # trained model on top of the base model
     def self.save_lora_adapters(model, output_dir)
       FileUtils.mkdir_p(output_dir)
 
@@ -161,7 +176,7 @@ module Trainers
       model.named_modules.each do |name, mod|
         if mod.is_a?(Trainers::LoraLinear)
           mod.lora_state_dict.each do |param_name, tensor|
-            lora_state["#{name}.#{param_name}"] = tensor
+            lora_state["#{name}.#{param_name}"] = tensor.detach.cpu
           end
         end
       end
@@ -170,29 +185,46 @@ module Trainers
         raise AdapterError, "No LoRA adapters found in model. Apply them with LoraModel.apply before saving."
       end
 
-      adapter_path = File.join(output_dir, "adapter_model.safetensors")
+      model.named_parameters.each do |name, param|
+        lora_state[name] ||= param.data.detach.cpu if param.requires_grad
+      end
+
+      adapter_path = File.join(output_dir, ADAPTER_FILE)
       require "safetensors"
-      Safetensors::Torch.save_file(lora_state, adapter_path)
+      Safetensors::Torch.save_file(lora_state, adapter_path, metadata: { "format" => "pt" })
       Trainers.log(:info, "LoRA adapters saved to #{adapter_path} (#{lora_state.size} tensors)")
 
       output_dir
     end
 
     def self.load_lora_adapters(model, input_dir)
-      adapter_path = File.join(input_dir, "adapter_model.safetensors")
+      adapter_path = File.join(input_dir, ADAPTER_FILE)
       raise AdapterError, "Adapter file not found: #{adapter_path}" unless File.exist?(adapter_path)
 
       require "safetensors"
       lora_state = Safetensors::Torch.load_file(adapter_path)
+      remaining  = lora_state.dup
 
       model.named_modules.each do |name, mod|
-        if mod.is_a?(Trainers::LoraLinear)
-          a_key = "#{name}.lora_A"
-          b_key = "#{name}.lora_B"
-          if lora_state[a_key] && lora_state[b_key]
-            mod.load_lora_weights(lora_state[a_key], lora_state[b_key])
-          end
+        next unless mod.is_a?(Trainers::LoraLinear)
+
+        a_key = "#{name}.lora_A"
+        b_key = "#{name}.lora_B"
+        if lora_state[a_key] && lora_state[b_key]
+          mod.load_lora_weights(lora_state[a_key], lora_state[b_key])
+          remaining.delete(a_key)
+          remaining.delete(b_key)
         end
+      end
+
+      params = model.named_parameters
+      unknown = remaining.keys - params.keys
+      unless unknown.empty?
+        raise AdapterError, "#{adapter_path} has weights the model cannot take: #{unknown.first(5).join(', ')}. " \
+                            "Apply LoRA with the same LoraConfig before loading the adapters."
+      end
+      Torch.no_grad do
+        remaining.each { |name, tensor| params[name].copy!(tensor) }
       end
 
       Trainers.log(:info, "LoRA adapters loaded from #{adapter_path}")
