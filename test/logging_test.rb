@@ -45,6 +45,24 @@ class LoggingTest < Minitest::Test
     assert_match "Model saved to", io.string
   end
 
+  # Issue #35: what is about to run, logged once before the first step
+  def test_training_setup_is_logged_at_the_start
+    io = StringIO.new
+    Trainers.logger = Logger.new(io)
+    model = TinyLoraTarget.new
+    Trainers::LoraModel.apply(model, Trainers::LoraConfig.new(r: 2, target_modules: ["query"], modules_to_save: []))
+    data = Trainers::Dataset.new(Array.new(6) { |i| { x: Torch.randn(8), labels: i % 2 } })
+    args = training_args(num_train_epochs: 2, per_device_train_batch_size: 2, gradient_accumulation_steps: 2)
+    trainer = Trainers::Trainer.new(model: model, args: args, train_dataset: data)
+    trainer.define_singleton_method(:forward) { |batch| model.call(batch[:x]) }
+    trainer.train
+
+    lines = io.string.lines.grep(/Training on/)
+    assert_equal 1, lines.size
+    assert_match "Training on cpu (float32): 6 examples, 2 epochs, 4 optimizer steps " \
+                 "(batch 2 x accumulation 2), 32 of 194 parameters trainable (16.49%)", lines.first
+  end
+
   def test_library_never_writes_to_stdout_by_default
     Trainers.logger = Trainers.default_logger.tap { |l| l.reopen(File::NULL) }
 

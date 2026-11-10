@@ -382,29 +382,55 @@ Default collator (no padding, expects uniform-length inputs):
 collator = Trainers::DefaultDataCollator.new
 ```
 
-## Supported Tasks
+## Support
 
-trainers-rb works with any `Torch::NN::Module`. The `Trainers.from_pretrained` convenience method supports these transformers-rb model classes:
+### Models and tasks
 
-| Task | Model class |
-|------|-------------|
-| `:sequence_classification` | `AutoModelForSequenceClassification` |
-| `:token_classification` | `AutoModelForTokenClassification` |
-| `:question_answering` | `AutoModelForQuestionAnswering` |
+trainers-rb trains any `Torch::NN::Module` whose `forward` takes the batch's keys. `Trainers.from_pretrained` loads transformers-rb models through its `AutoModelFor*` classes, which cover these architectures:
 
-You can also use any custom model:
+<!-- architectures:start -->
+| `model_type` | Sequence classification | Token classification | Question answering | Default LoRA targets |
+|---|---|---|---|---|
+| `bert` | ✓ | ✓ | – | `query`, `value` |
+| `deberta-v2` | ✓ | – | – | `query_proj`, `value_proj` |
+| `distilbert` | ✓ | – | ✗ no loss | `q_lin`, `v_lin` |
+| `mpnet` | – | – | – | `q`, `v` |
+| `xlm-roberta` | ✓ | – | – | `query`, `value` |
+<!-- architectures:end -->
+
+This table is checked against transformers-rb by the test suite. **Question answering can't be trained yet:** transformers-rb 0.2.0's `DistilBertForQuestionAnswering` raises `Todo` when given `start_positions`, so there is no loss. transformers-rb also has heads that its `AutoModelFor*` classes don't reach, such as `MPNetForSequenceClassification`. Build those directly with their config and pass them to `Trainer`:
 
 ```ruby
 trainer = Trainers::Trainer.new(model: my_custom_model, args: args, ...)
 ```
 
-## Device Support
+### Platforms
+
+| | Tested in CI | Hand-tested | Not supported |
+|---|---|---|---|
+| Ruby | 3.3, 3.4, 4.0 | | 3.2 and older |
+| torch-rb | 0.17.1, 0.27 | | older than 0.17.1 |
+| OS | Ubuntu 24.04, macOS 15 (Apple Silicon) | macOS 27 | Windows (untested) |
+| CPU | ✓ | ✓ | |
+| MPS (Apple Silicon GPU) | | DistilBERT-base with LoRA, Apple M3 Pro | |
+| CUDA (NVIDIA GPU) | | | Untested: chosen automatically, but nobody has run it yet |
+| Multiple GPUs | | | Not planned |
+
+Reports for other hardware are welcome as issues, with the "Training on" log line.
+
+### Devices
 
 trainers-rb picks the first available device, in this order:
 
-- **CUDA**: NVIDIA GPU. Not tested in CI.
+- **CUDA**: NVIDIA GPU
 - **MPS**: Apple Silicon GPU, skipped with `no_mps: true`
 - **CPU**: always available
+
+The first log line of a run shows what it runs on:
+
+```
+Training on mps (float32): 8,530 examples, 3 epochs, 3,201 optimizer steps (batch 8 x accumulation 1), 739,586 of 67,102,466 parameters trainable (1.10%)
+```
 
 ```ruby
 # Force CPU

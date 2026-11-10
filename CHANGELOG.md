@@ -11,6 +11,8 @@
 - **`Dataset#map` and `Dataset#filter`** return new Datasets. `map` returns an Array, as before, when the block doesn't return Hashes. `select` still returns an Array.
 - **`Dataset#tokenize(tokenizer, column: :text, max_length: 512, keep: false)`** (#31) adds `input_ids` and `attention_mask` (and `token_type_ids` for text pairs), truncated to `max_length`. It takes a transformers-rb tokenizer or a `Tokenizers::Tokenizer`, and restores the latter's truncation setting afterwards.
 - **`Trainers.from_pretrained(labels:)`** (#32) sets `num_labels`, `id2label` and `label2id`, so `config.json`, `load_pretrained` and Python see the class names. A `num_labels:` that contradicts `labels:` raises `ArgumentError`.
+- **A log line when training starts** (#35) with the device, dtype, number of examples, epochs, optimizer steps, batch and accumulation, and how many parameters are trainable.
+- `from_pretrained(task: :question_answering)` warns that transformers-rb 0.2.0 can't compute the question-answering loss.
 - **`max_steps:`** (#34) trains for that many optimizer steps, overriding `num_train_epochs`. The learning-rate schedule and `warmup_ratio` use it as the total.
 
 ### Fixed
@@ -28,6 +30,7 @@
 
 - **LoRA `target_modules` defaults per architecture** (#33). It was `["query", "value"]`, which matched nothing on DistilBERT. The default is now `nil`, meaning `q_lin`/`v_lin` for DistilBERT, `query`/`value` for BERT and XLM-RoBERTa, `query_proj`/`value_proj` for DeBERTa-v2 and `q`/`v` for MPNet. Other transformers models need `target_modules:`, and models without a config keep `["query", "value"]`.
 - **LoRA targets match whole name parts**, as in PEFT. `"query"` matches `attention.self.query` but no longer `pos_query_proj`. A target that only matches by substring still works, with a deprecation warning; substring matching ends in 0.5.0.
+- **README "Support" section** (#35) replaces "Supported Tasks" and "Device Support". It has a table of architectures and tasks that the test suite checks against transformers-rb, and a platform matrix that separates tested in CI, hand-tested and unsupported. Question answering is now listed as not trainable. It was listed as supported before.
 - New runtime dependency: `csv`, which is no longer a default gem from Ruby 3.4.
 
 ## 0.3.0 (2026-11-10)

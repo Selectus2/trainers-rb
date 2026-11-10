@@ -60,6 +60,7 @@ module Trainers
       @optimizer    = create_optimizer
       @lr_scheduler = create_scheduler(total_steps)
       @optimizer.zero_grad
+      log_training_setup(device, num_epochs, total_steps)
       start_epoch, skip_batches = resume_from_checkpoint
 
       @callback_handler.fire(:on_train_begin, @args, @state, @control)
@@ -238,6 +239,22 @@ module Trainers
     end
 
     private
+
+    # One line with what is about to run, so a run on the wrong device or
+    # with the wrong number of trainable weights shows up before it starts
+    def log_training_setup(device, num_epochs, total_steps)
+      params    = @model.parameters
+      total     = params.sum(&:numel)
+      trainable = params.select(&:requires_grad).sum(&:numel)
+      dtype     = params.first&.dtype || "no parameters"
+      percent   = total.positive? ? trainable * 100.0 / total : 0.0
+
+      Trainers.log(:info, "Training on #{device.respond_to?(:type) ? device.type : device} (#{dtype}): #{@train_dataset.size} examples, " \
+                          "#{num_epochs} epochs, #{total_steps} optimizer steps " \
+                          "(batch #{@args.per_device_train_batch_size} x accumulation #{@args.gradient_accumulation_steps}), " \
+                          "#{LoraUtils.format_number(trainable)} of #{LoraUtils.format_number(total)} " \
+                          "parameters trainable (#{format('%.2f', percent)}%)")
+    end
 
     def compute_loss(batch)
       output, labels = forward_with_labels(batch)

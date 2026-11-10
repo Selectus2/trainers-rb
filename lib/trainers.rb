@@ -51,6 +51,12 @@ module Trainers
                     Transformers::AutoModel
                   end
 
+    if task == :question_answering
+      Trainers.log(:warn, "transformers-rb #{Transformers::VERSION} cannot compute the question-answering loss " \
+                          "(DistilBertForQuestionAnswering raises Todo when given start_positions), so this model " \
+                          "can predict but not be trained")
+    end
+
     model     = model_class.from_pretrained(model_name, num_labels: num_labels)
     tokenizer = Transformers::AutoTokenizer.from_pretrained(model_name)
 
