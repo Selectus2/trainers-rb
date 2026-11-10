@@ -2,8 +2,15 @@
 
 ## Unreleased (0.4.0)
 
+**This release changes LoRA defaults.** `LoraConfig#target_modules` now defaults to the query and value layers of the model's architecture, and targets match by name parts rather than substrings. See Changed.
+
 ### Added
 
+- **Datasets from files** (#30): `Dataset.from_jsonl(path)` and `Dataset.from_csv(path, **csv_options)`. A malformed JSONL line raises `ConfigurationError` naming the file and line.
+- **`Dataset#split(test_size:, seed: 42)`** returns `[train, test]`, shuffled with `Random.new(seed)`. `test_size` is a fraction or a row count.
+- **`Dataset#map` and `Dataset#filter`** return new Datasets. `map` returns an Array, as before, when the block doesn't return Hashes. `select` still returns an Array.
+- **`Dataset#tokenize(tokenizer, column: :text, max_length: 512, keep: false)`** (#31) adds `input_ids` and `attention_mask` (and `token_type_ids` for text pairs), truncated to `max_length`. It takes a transformers-rb tokenizer or a `Tokenizers::Tokenizer`, and restores the latter's truncation setting afterwards.
+- **`Trainers.from_pretrained(labels:)`** (#32) sets `num_labels`, `id2label` and `label2id`, so `config.json`, `load_pretrained` and Python see the class names. A `num_labels:` that contradicts `labels:` raises `ArgumentError`.
 - **`max_steps:`** (#34) trains for that many optimizer steps, overriding `num_train_epochs`. The learning-rate schedule and `warmup_ratio` use it as the total.
 
 ### Fixed
@@ -16,6 +23,12 @@
 - **`DataCollatorWithPadding` pads Tensor labels with `-100`**, the same as Array labels. They used to be padded with `0`, a real class, so padding counted towards the loss.
 - **An epoch-end checkpoint written after a mid-epoch stop records where training stopped.** When a callback or `max_steps` ended training part-way through an epoch, the checkpoint claimed the whole epoch was done, and resuming skipped its remaining batches.
 - `predict` no longer passes labels to the model, and puts the model back in training mode afterwards, as `evaluate` does.
+
+### Changed
+
+- **LoRA `target_modules` defaults per architecture** (#33). It was `["query", "value"]`, which matched nothing on DistilBERT. The default is now `nil`, meaning `q_lin`/`v_lin` for DistilBERT, `query`/`value` for BERT and XLM-RoBERTa, `query_proj`/`value_proj` for DeBERTa-v2 and `q`/`v` for MPNet. Other transformers models need `target_modules:`, and models without a config keep `["query", "value"]`.
+- **LoRA targets match whole name parts**, as in PEFT. `"query"` matches `attention.self.query` but no longer `pos_query_proj`. A target that only matches by substring still works, with a deprecation warning; substring matching ends in 0.5.0.
+- New runtime dependency: `csv`, which is no longer a default gem from Ruby 3.4.
 
 ## 0.3.0 (2026-11-10)
 
@@ -36,6 +49,7 @@
 - **`save_model` writes the tokenizer for transformers-rb tokenizers** (#17). It used to save `tokenizer.json` only for objects that respond to `save`, which ruled out `AutoTokenizer` results such as `DistilBertTokenizerFast`, so no tokenizer was ever written. It now saves the backend as `tokenizer.json`, plus `tokenizer_config.json` with the tokenizer class and special tokens.
 - `model.safetensors` and `adapter_model.safetensors` carry the `"format" => "pt"` metadata that the transformers loaders in Ruby and Python check for.
 
+
 ### Changed
 
 - README: the LoRA example uses DistilBERT's module names (`q_lin`, `v_lin`) and shows its real output. The roadmap lists what is not planned, and "Known limitations" is gone, because its three issues are fixed.
@@ -43,6 +57,7 @@
 ## 0.2.0 (2026-10-31)
 
 **This release changes training results.** Runs that use `gradient_accumulation_steps > 1` now follow the intended learning-rate schedule. All runs now apply `seed:`, so data order is different from 0.1.x and reproducible. Expect different (better) final models than 0.1.x with the same arguments.
+
 
 ### Changed
 
@@ -74,6 +89,7 @@
 
 - `LoraModel.merge` no longer applies adapters twice. Merged layers kept adding the LoRA path on top of the merged weights, so a merged model's outputs were wrong. Each `LoraLinear` is now replaced by a plain `Torch::NN::Linear` holding the merged weights, so a saved merged model has the base model's parameter names. `LoraLinear#merge!` is idempotent and adds `#merged?` and `#to_linear`.
 - `Trainers::VERSION` now matches the gem version. The gemspec reads it from `lib/trainers/version.rb`. (#2)
+
 
 ### Changed
 

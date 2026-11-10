@@ -42,23 +42,19 @@ For Linux, and for running the tests, see [CONTRIBUTING.md](CONTRIBUTING.md).
 ```ruby
 require "trainers-rb"
 
-# Load a pre-trained model and tokenizer
+# Load a pre-trained model and tokenizer. labels: names the classes in id
+# order; they are saved in config.json.
 model, tokenizer = Trainers.from_pretrained(
   "distilbert-base-uncased",
   task: :sequence_classification,
-  num_labels: 2
+  labels: %w[negative positive]
 )
 
-# Prepare your dataset
-train_data = texts.map.with_index do |text, i|
-  encoded = tokenizer.(text, truncation: true, max_length: 128)
-  {
-    input_ids:      encoded["input_ids"],
-    attention_mask: encoded["attention_mask"],
-    labels:         labels[i]
-  }
-end
-train_dataset = Trainers::Dataset.new(train_data)
+# reviews.jsonl: {"text": "A gripping film.", "label": 1} on each line
+dataset = Trainers::Dataset.from_jsonl("reviews.jsonl")
+                           .map { |row| row.merge(labels: row.delete(:label)) }
+                           .tokenize(tokenizer, column: :text, max_length: 128)
+train_dataset, val_dataset = dataset.split(test_size: 0.1, seed: 42)
 
 # Configure and train
 args = Trainers::TrainingArguments.new(
@@ -122,7 +118,7 @@ config = Trainers::LoraConfig.new(
   r:              8,         # rank
   lora_alpha:     16,        # scaling factor
   lora_dropout:   0.1,
-  target_modules: ["q_lin", "v_lin"],  # which Linear layers to adapt (DistilBERT names)
+  # target_modules: ["q_lin", "v_lin"],  # defaults to the attention query and value layers
   bias:           :none,     # :none, :all, or :lora_only
   task_type:      :sequence_classification
   # modules_to_save: ["classifier"]  # defaults to the task head for task_type
@@ -130,7 +126,7 @@ config = Trainers::LoraConfig.new(
 
 Trainers::LoraModel.apply(model, config)
 # => Training in full: pre_classifier, classifier
-# => LoRA applied to 12 modules: ...
+# => LoRA target_modules ["q_lin", "v_lin"] (default) applied to 12 modules: ...
 # => trainable params: 739,586 || all params: 67,102,466 || trainable%: 1.1022%
 
 # Train as usual
@@ -153,6 +149,19 @@ The task head is trained in full, as in PEFT. `from_pretrained` initialises it r
 | `:question_answering` | `qa_outputs` |
 
 Names match the last part of a module's name. Pass `modules_to_save: []` to freeze the head, or your own list for other models.
+
+`target_modules` defaults to the attention query and value layers of the model's `config.model_type`:
+
+| `model_type` | Default `target_modules` |
+|---|---|
+| `bert`, `xlm-roberta` | `query`, `value` |
+| `distilbert` | `q_lin`, `v_lin` |
+| `deberta-v2` | `query_proj`, `value_proj` |
+| `mpnet` | `q`, `v` |
+
+Any other `model_type` needs `target_modules:`. Models without a transformers config default to `query` and `value`. Pass `:all_linear` to adapt every Linear layer.
+
+A target matches a module when it is the module's full name or the last part of it, as in PEFT: `"query"` matches `attention.self.query` but not `pos_query_proj`. A target that matches nothing that way still matches by substring, with a deprecation warning. Substring matching ends in 0.5.0.
 
 ### Loading saved LoRA adapters
 
@@ -331,15 +340,33 @@ args = Trainers::TrainingArguments.new(lr_scheduler_type: :constant, warmup_step
 
 ### Dataset
 
-Wrap an array of hashes:
+Rows are Hashes with Symbol keys. Load them from a file, or wrap an Array:
 
 ```ruby
-data = [
-  { input_ids: [101, 2023, 2003], attention_mask: [1, 1, 1], labels: 1 },
-  { input_ids: [101, 2919, 2143], attention_mask: [1, 1, 1], labels: 0 },
-]
-dataset = Trainers::Dataset.new(data)
+dataset = Trainers::Dataset.from_jsonl("train.jsonl")      # one JSON object per line
+dataset = Trainers::Dataset.from_csv("train.csv")          # header row gives the keys
+dataset = Trainers::Dataset.from_csv("train.tsv", col_sep: "\t", converters: :numeric)
+dataset = Trainers::Dataset.new([{ text: "A gripping film.", labels: 1 }])
 ```
+
+CSV values are Strings unless you pass `converters: :numeric`. Other options go to Ruby's `CSV`.
+
+```ruby
+# A new Dataset with each row replaced. A block that doesn't return Hashes
+# gives an Array, as Enumerable#map does.
+dataset = dataset.map { |row| row.merge(labels: Integer(row[:label])) }
+dataset = dataset.filter { |row| row[:text].size > 10 }  # select returns an Array
+
+# Shuffled with Random.new(seed): the same seed gives the same split
+train, test = dataset.split(test_size: 0.2, seed: 42)    # or a row count: test_size: 500
+
+# input_ids and attention_mask, truncated to max_length tokens. The text
+# column is dropped unless keep: true.
+dataset = dataset.tokenize(tokenizer, column: :text, max_length: 256)
+dataset = dataset.tokenize(tokenizer, column: [:premise, :hypothesis])  # text pairs
+```
+
+`tokenize` takes a transformers-rb tokenizer or a `Tokenizers::Tokenizer`.
 
 ### Data Collators
 
