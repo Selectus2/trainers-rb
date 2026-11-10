@@ -456,7 +456,7 @@ trainers-rb adds the training layer that transformers-rb intentionally omits. Bo
 
 ## Roadmap
 
-What comes next is chosen from real fine-tunes. If something was missing in yours, [open an issue](https://github.com/Selectus2/trainers-rb/issues): a report from a user outranks this list. Candidates are collected in [#20](https://github.com/Selectus2/trainers-rb/issues/20).
+What comes next is chosen from real fine-tunes. If something was missing in yours, [open an issue](https://github.com/Selectus2/trainers-rb/issues): a report from a user outranks this list. Planned work is tracked in the [milestones](https://github.com/Selectus2/trainers-rb/milestones).
 
 **Not planned, at any version:** custom kernels, quantisation (including QLoRA), multi-GPU and distributed training, RL methods (GRPO, DPO), vision or speech models, GGUF export. torch-rb can't reach most of them from Ruby.
 

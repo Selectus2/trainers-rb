@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (0.4.0)
+## 0.4.0 (2026-11-10)
 
 **Upgrade from 0.3.0 if you train on MPS or CUDA.** 0.3.0 crashes when `evaluate` runs before `train`, and can run out of GPU memory during evaluation. Both are fixed here (see Fixed).
 
