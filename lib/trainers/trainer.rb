@@ -46,10 +46,16 @@ module Trainers
       # One step is one optimizer update. The last accumulation window of an
       # epoch may be shorter than gradient_accumulation_steps; it still steps.
       steps_per_epoch = (batches_per_epoch.to_f / accum).ceil
-      total_steps     = steps_per_epoch * @args.num_train_epochs
+      if @args.max_steps
+        total_steps = @args.max_steps
+        num_epochs  = (total_steps.to_f / steps_per_epoch).ceil
+      else
+        num_epochs  = @args.num_train_epochs
+        total_steps = steps_per_epoch * num_epochs
+      end
 
       @state.max_steps        = total_steps
-      @state.num_train_epochs = @args.num_train_epochs
+      @state.num_train_epochs = num_epochs
 
       @optimizer    = create_optimizer
       @lr_scheduler = create_scheduler(total_steps)
@@ -58,8 +64,9 @@ module Trainers
 
       @callback_handler.fire(:on_train_begin, @args, @state, @control)
 
-      @args.num_train_epochs.times do |epoch|
+      num_epochs.times do |epoch|
         next if epoch < start_epoch
+        break if @state.global_step >= total_steps # resumed from the final checkpoint
 
         @state.epoch = epoch + 1
         @callback_handler.fire(:on_epoch_begin, @args, @state, @control)
@@ -95,6 +102,7 @@ module Trainers
           @lr_scheduler.step
           @optimizer.zero_grad
           @state.global_step += 1
+          @control.should_training_stop = true if @state.global_step >= total_steps
 
           # Logging
           if should_log?
@@ -172,24 +180,21 @@ module Trainers
       all_preds  = []
       all_labels = []
       total_loss = 0.0
-      total_steps = 0
+      examples   = 0
 
       Torch.no_grad do
         each_batch(dataset, @args.per_device_eval_batch_size) do |batch|
-          batch  = move_to_device(batch, device)
-          labels = pop_labels(batch).values.first
-
-          output = forward(batch)
+          batch          = move_to_device(batch, device)
+          output, labels = forward_with_labels(batch)
+          logits         = logits_of(output)
 
           if labels
-            logits = output.respond_to?(:logits) ? output.logits : output
-            loss = Torch::NN::F.cross_entropy(logits, labels)
-            total_loss += loss.item
+            # Weight by batch size, so a short last batch counts for its rows only
+            size        = labels.size(0)
+            total_loss += loss_for(output, logits, labels).item * size
+            examples   += size
             all_labels << labels.detach.cpu
           end
-          total_steps += 1
-
-          logits = output.respond_to?(:logits) ? output.logits : output
           all_preds << logits.detach.cpu
         end
       end
@@ -197,12 +202,10 @@ module Trainers
       @model.train
 
       metrics = {}
-      metrics[:eval_loss] = total_loss / total_steps if total_steps > 0
+      metrics[:eval_loss] = total_loss / examples if examples > 0
 
       if @compute_metrics && all_preds.any? && all_labels.any?
-        preds  = Torch.cat(all_preds)
-        labels = Torch.cat(all_labels)
-        eval_pred = EvalPrediction.new(predictions: preds, label_ids: labels)
+        eval_pred = EvalPrediction.new(predictions: concat_padded(all_preds), label_ids: concat_padded(all_labels))
         custom_metrics = @compute_metrics.call(eval_pred)
         metrics.merge!(custom_metrics)
       end
@@ -210,6 +213,8 @@ module Trainers
       metrics
     end
 
+    # Logits for every row. Batches padded to different lengths, as in token
+    # classification, are padded to the longest with -100.
     def predict(test_dataset)
       device = @args.resolved_device
       @model.eval
@@ -217,14 +222,14 @@ module Trainers
       all_preds = []
       Torch.no_grad do
         each_batch(test_dataset, @args.per_device_eval_batch_size) do |batch|
-          batch  = move_to_device(batch, device)
-          output = forward(batch)
-          logits = output.respond_to?(:logits) ? output.logits : output
-          all_preds << logits.detach.cpu
+          batch = move_to_device(batch, device)
+          pop_labels(batch)
+          all_preds << logits_of(forward(batch)).detach.cpu
         end
       end
+      @model.train
 
-      Torch.cat(all_preds)
+      concat_padded(all_preds)
     end
 
     def save_model(output_dir = nil)
@@ -235,34 +240,71 @@ module Trainers
     private
 
     def compute_loss(batch)
+      output, labels = forward_with_labels(batch)
+      if labels.nil? && !(output.respond_to?(:loss) && output.loss)
+        raise ConfigurationError, "Model did not return a loss and no labels found in batch. " \
+                                  "Either pass labels in your dataset or use a model that computes loss."
+      end
+
+      loss_for(output, logits_of(output), labels)
+    end
+
+    # Runs the model with the labels, so models that compute their own loss
+    # return it. Returns [output, labels]; labels is nil when the batch has none.
+    def forward_with_labels(batch)
       label_values = pop_labels(batch)
       labels       = label_values.values.first
 
-      # Try passing labels to the model (some models compute loss internally)
       output = begin
         forward(batch.merge(label_values))
+      rescue NameError => e
+        # transformers-rb 0.2.0's BertForTokenClassification computes its loss
+        # with an unqualified CrossEntropyLoss and raises whenever it gets labels
+        raise unless e.name == :CrossEntropyLoss
+
+        forward(batch)
       rescue => e
         # If the model doesn't support labels kwarg (e.g. transformers-rb Todo),
         # fall back to forward without labels + external loss
-        if e.message.include?("Todo") || e.message.include?("not implemented")
-          forward(batch)
-        else
-          raise
-        end
+        raise unless e.message.include?("Todo") || e.message.include?("not implemented")
+
+        forward(batch)
       end
 
-      # Restore labels to batch for downstream use
-      batch.merge!(label_values)
+      [output, labels]
+    end
 
-      if output.respond_to?(:loss) && output.loss
-        output.loss
-      elsif labels
-        logits = output.respond_to?(:logits) ? output.logits : output
-        Torch::NN::F.cross_entropy(logits, labels)
+    # The model's own loss when it returns one, otherwise cross-entropy over
+    # the logits. Per-token logits [batch, seq, classes] are flattened, and
+    # labels of -100 (padding) are ignored.
+    def loss_for(output, logits, labels)
+      return output.loss if output.respond_to?(:loss) && output.loss
+
+      if logits.dim > 2
+        Torch::NN::F.cross_entropy(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
       else
-        raise ConfigurationError, "Model did not return a loss and no labels found in batch. " \
-              "Either pass labels in your dataset or use a model that computes loss."
+        Torch::NN::F.cross_entropy(logits, labels)
       end
+    end
+
+    def logits_of(output)
+      output.respond_to?(:logits) ? output.logits : output
+    end
+
+    # Concatenates per-batch tensors along dim 0, first padding dim 1 to the
+    # longest batch with -100
+    def concat_padded(tensors)
+      return Torch.cat(tensors) if tensors.first.dim < 2
+
+      length = tensors.map { |t| t.size(1) }.max
+      padded = tensors.map do |t|
+        next t if t.size(1) == length
+
+        shape = t.shape.dup
+        shape[1] = length - t.size(1)
+        Torch.cat([t, Torch.full(shape, -100, dtype: t.dtype)], 1)
+      end
+      Torch.cat(padded)
     end
 
     def forward(batch)

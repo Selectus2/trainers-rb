@@ -195,6 +195,7 @@ Resume with the same `seed`, dataset and arguments as the original run. The trai
 |----------|---------|-------------|
 | `output_dir` | `"./output"` | Directory for checkpoints and saved models |
 | `num_train_epochs` | `3` | Number of training epochs |
+| `max_steps` | `nil` | Number of optimizer steps to train for. Overrides `num_train_epochs` when set |
 | `per_device_train_batch_size` | `8` | Training batch size |
 | `per_device_eval_batch_size` | `8` | Evaluation batch size |
 | `learning_rate` | `5e-5` | Peak learning rate for AdamW |
@@ -372,14 +373,15 @@ trainer = Trainers::Trainer.new(model: my_custom_model, args: args, ...)
 
 ## Device Support
 
-trainers-rb auto-detects the best available device:
+trainers-rb picks the first available device, in this order:
 
-- **CPU** — always available
-- **MPS** — Apple Silicon GPU, used automatically when available
+- **CUDA**: NVIDIA GPU. Not tested in CI.
+- **MPS**: Apple Silicon GPU, skipped with `no_mps: true`
+- **CPU**: always available
 
 ```ruby
 # Force CPU
-args = Trainers::TrainingArguments.new(no_mps: true)
+args = Trainers::TrainingArguments.new(device: Torch.device("cpu"))
 
 # Or set explicitly
 args = Trainers::TrainingArguments.new(device: Torch.device("mps"))

@@ -46,7 +46,7 @@ class PublicApiTest < Minitest::Test
       gradient_accumulation_steps warmup_steps warmup_ratio lr_scheduler_type
       eval_strategy eval_steps save_strategy save_steps save_total_limit
       logging_steps logging_first_step seed device no_mps dataloader_drop_last label_names
-      resume_from_checkpoint
+      resume_from_checkpoint max_steps
     ]
     missing = expected_keys - Trainers::TrainingArguments::DEFAULTS.keys
     assert_empty missing, "#{MESSAGE}: DEFAULTS lost #{missing.inspect}"
