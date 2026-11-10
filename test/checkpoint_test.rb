@@ -55,6 +55,53 @@ class CheckpointTest < Minitest::Test
     assert_resume_matches(save_strategy: :steps, save_steps: 4, stop_at: 4, lora: true)
   end
 
+  # An epoch checkpoint after a mid-epoch stop records the batches done
+  def test_resume_after_a_mid_epoch_stop_with_epoch_saves_matches_an_uninterrupted_run
+    assert_resume_matches(save_strategy: :epoch, stop_at: 4)
+    state = JSON.parse(File.read(File.join(@tmpdir, "checkpoint-4", "trainer_state.json")))
+    assert_equal [1, 2], [state["epochs_completed"], state["batches_done_in_epoch"]]
+  end
+
+  # Batches skipped on resume count towards the position of the next stop
+  def test_second_mid_epoch_stop_counts_the_batches_skipped_on_resume
+    Trainers.set_seed(1)
+    reference = train_run(TinyClassifier.new, output_dir: File.join(@tmpdir, "reference"))
+
+    Trainers.set_seed(1)
+    train_run(TinyClassifier.new, save_strategy: :steps, save_steps: 4, stop_at: 4)   # stops 2 batches into epoch 2
+    train_run(TinyClassifier.new, save_strategy: :epoch, stop_at: 5, resume_from_checkpoint: true)
+    state = JSON.parse(File.read(File.join(@tmpdir, "checkpoint-5", "trainer_state.json")))
+    assert_equal [1, 4], [state["epochs_completed"], state["batches_done_in_epoch"]]
+
+    resumed = train_run(TinyClassifier.new, resume_from_checkpoint: true)
+    reference.model.named_parameters.each do |name, param|
+      assert_equal param.to_a, resumed.model.named_parameters[name].to_a, name
+    end
+  end
+
+  # A run killed while writing a checkpoint resumes from the previous one
+  def test_interrupted_save_leaves_the_previous_checkpoint_as_the_latest
+    original = Trainers::Checkpoint.method(:save)
+    calls = 0
+    Trainers::Checkpoint.define_singleton_method(:save) do |*args, **kwargs|
+      calls += 1
+      raise Interrupt, "killed mid-save" if calls == 2
+
+      original.call(*args, **kwargs)
+    end
+    begin
+      assert_raises(Interrupt) { train_run(TinyClassifier.new, save_strategy: :steps, save_steps: 2) }
+    ensure
+      Trainers::Checkpoint.define_singleton_method(:save, original)
+    end
+
+    assert_equal %w[.checkpoint-4.tmp checkpoint-2], Dir.children(@tmpdir).sort
+    trainer = train_run(TinyClassifier.new, save_strategy: :steps, save_steps: 2, resume_from_checkpoint: true)
+    assert_equal 9, trainer.state.global_step
+    refute Dir.exist?(File.join(@tmpdir, ".checkpoint-4.tmp")), "the next save of step 4 replaces the partial one"
+    assert Dir.exist?(File.join(@tmpdir, "checkpoint-4"))
+  end
+
   def test_full_checkpoint_contents
     train_run(TinyClassifier.new, save_strategy: :steps, save_steps: 4, stop_at: 4)
     dir = File.join(@tmpdir, "checkpoint-4")

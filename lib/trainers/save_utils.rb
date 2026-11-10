@@ -103,7 +103,9 @@ module Trainers
     end
 
     # Internal: config.json from the model's transformers config, with
-    # "architectures" filled in so loaders know which class to build
+    # "architectures" set to the class being saved so loaders build that
+    # class. A pretrained config can still name another head, such as
+    # DistilBertForMaskedLM.
     def self.save_config(model, output_dir)
       config = model.respond_to?(:config) ? model.config : nil
       unless config.respond_to?(:to_json_string)
@@ -113,7 +115,7 @@ module Trainers
       end
 
       data = JSON.parse(config.to_json_string)
-      data["architectures"] ||= [model.class.name.split("::").last]
+      data["architectures"] = [model.class.name.split("::").last]
       File.write(File.join(output_dir, CONFIG_FILE), JSON.pretty_generate(data.sort.to_h) + "\n")
     end
 

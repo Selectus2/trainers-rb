@@ -114,6 +114,21 @@ class SaveLoadTest < Minitest::Test
                  model.(input_ids: ids, attention_mask: mask)[:logits].to_a
   end
 
+  # A head built from a pretrained config that names another architecture,
+  # such as DistilBertForMaskedLM, is saved under its own class
+  def test_architectures_names_the_saved_class
+    config = Transformers::Distilbert::DistilBertConfig.new(
+      vocab_size: VOCAB.size, dim: 16, n_layers: 1, n_heads: 2, hidden_dim: 32, max_position_embeddings: 32,
+      architectures: ["DistilBertForMaskedLM"]
+    )
+    model = Transformers::Distilbert::DistilBertForSequenceClassification.new(config)
+    quietly { Trainers::SaveUtils.save_pretrained(model, nil, @tmpdir) }
+
+    saved = JSON.parse(File.read(File.join(@tmpdir, "config.json")))
+    assert_equal ["DistilBertForSequenceClassification"], saved["architectures"]
+    assert_instance_of Transformers::Distilbert::DistilBertForSequenceClassification, Trainers.load_pretrained(@tmpdir).first
+  end
+
   def test_mismatched_weights_raise_checkpoint_error
     quietly { Trainers::SaveUtils.save_pretrained(@model, nil, @tmpdir) }
     config_path = File.join(@tmpdir, "config.json")

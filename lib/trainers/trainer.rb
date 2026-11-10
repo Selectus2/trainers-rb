@@ -69,7 +69,9 @@ module Trainers
         epoch_batches = 0
 
         skip = epoch == start_epoch ? skip_batches : 0
+        batches_done = skip
         each_batch(@train_dataset, batch_size, shuffle: true, skip: skip) do |batch, index|
+          batches_done = index + 1
           position     = index % accum
           window_start = index - position
           window_size  = [accum, batches_per_epoch - window_start].min
@@ -138,8 +140,14 @@ module Trainers
         end
 
         # Epoch-based saving
+        # A run stopped part-way through the epoch records where it stopped,
+        # counting batches skipped when it was resumed
         if @args.save_strategy == :epoch
-          save_checkpoint(epochs_completed: epoch + 1, batches_done_in_epoch: 0)
+          if batches_done == batches_per_epoch
+            save_checkpoint(epochs_completed: epoch + 1, batches_done_in_epoch: 0)
+          else
+            save_checkpoint(epochs_completed: epoch, batches_done_in_epoch: batches_done)
+          end
           @callback_handler.fire(:on_save, @args, @state, @control)
         end
 
@@ -363,16 +371,27 @@ module Trainers
     # A full fine-tune checkpoint holds the model as save_model writes it; a
     # LoRA checkpoint holds only the adapters and other trainable weights.
     # Both add the optimizer and trainer state needed to resume.
+    #
+    # The files are written to a hidden directory that resume_from_checkpoint
+    # ignores, which is renamed to checkpoint-N once complete, so a run
+    # killed mid-save leaves the previous checkpoint as the latest.
     def save_checkpoint(position)
-      dir  = File.join(@args.output_dir, "checkpoint-#{@state.global_step}")
+      name = "checkpoint-#{@state.global_step}"
+      dir  = File.join(@args.output_dir, name)
+      tmp  = File.join(@args.output_dir, ".#{name}.tmp")
+      FileUtils.rm_rf(tmp)
+
       lora = lora_model?
       if lora
-        SaveUtils.save_lora_adapters(@model, dir)
+        SaveUtils.save_lora_adapters(@model, tmp)
       else
-        save_model(dir)
+        save_model(tmp)
       end
-      Checkpoint.save(dir, model: @model, optimizer: @optimizer, state: @state,
+      Checkpoint.save(tmp, model: @model, optimizer: @optimizer, state: @state,
                            position: position, seed: @args.seed, lora: lora)
+
+      FileUtils.rm_rf(dir)
+      File.rename(tmp, dir)
       cleanup_checkpoints if @args.save_total_limit
     end
 
