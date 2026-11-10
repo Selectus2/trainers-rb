@@ -2,6 +2,8 @@
 
 ## Unreleased (0.4.0)
 
+**Upgrade from 0.3.0 if you train on MPS or CUDA.** 0.3.0 crashes when `evaluate` runs before `train`, and can run out of GPU memory during evaluation. Both are fixed here (see Fixed).
+
 **This release changes LoRA defaults.** `LoraConfig#target_modules` now defaults to the query and value layers of the model's architecture, and targets match by name parts rather than substrings. See Changed.
 
 ### Added
@@ -23,6 +25,8 @@
 - **CUDA is used when available** (#28). `resolved_device` only ever chose MPS or the CPU. The order is now an explicit `device:`, then CUDA, then MPS, then the CPU.
 - **`DataCollatorWithPadding` truncates rows longer than `max_length`** (#29). Rows given as Arrays raised `ArgumentError: negative argument`. Rows given as Tensors were already truncated.
 - **`DataCollatorWithPadding` pads Tensor labels with `-100`**, the same as Array labels. They used to be padded with `0`, a real class, so padding counted towards the loss.
+- **Memory stays flat during training and evaluation.** torch-rb tensors are freed only when Ruby garbage-collects them, and Ruby can't see the memory LibTorch holds, so it rarely collects. Activations piled up batch after batch: evaluating DistilBERT on MPS ran out of memory at 22.6 GiB within 17 batches. The Trainer now runs a minor garbage collection after each batch, which kept that evaluation at 0.8 GB and costs under a millisecond per batch.
+- **`evaluate` and `predict` move the model to the training device.** Only `train` did, so calling `evaluate` before `train` on MPS or CUDA, for a baseline, crashed with `Passed CPU tensor to MPS op`. Found by fine-tuning DistilBERT on MPS.
 - `predict` no longer passes labels to the model, and puts the model back in training mode afterwards, as `evaluate` does.
 
 ### Changed

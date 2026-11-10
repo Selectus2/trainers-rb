@@ -426,11 +426,13 @@ trainers-rb picks the first available device, in this order:
 - **MPS**: Apple Silicon GPU, skipped with `no_mps: true`
 - **CPU**: always available
 
-The first log line of a run shows what it runs on:
+The first log line of a run shows what it runs on. For DistilBERT with LoRA on an Apple M3 Pro:
 
 ```
-Training on mps (float32): 8,530 examples, 3 epochs, 3,201 optimizer steps (batch 8 x accumulation 1), 739,586 of 67,102,466 parameters trainable (1.10%)
+Training on mps (float32): 9,596 examples, 1 epoch, 600 optimizer steps (batch 16 x accumulation 1), 739,586 of 67,102,466 parameters trainable (1.10%)
 ```
+
+That run, on 10,662 movie-review sentences ([rotten_tomatoes](https://www.cs.cornell.edu/people/pabo/movie-review-data/)) with 1,066 held out, reached 82.8% accuracy in 74 seconds. A full fine-tune reached 83.6% in 121 seconds.
 
 ```ruby
 # Force CPU

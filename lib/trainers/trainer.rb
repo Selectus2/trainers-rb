@@ -95,6 +95,7 @@ module Trainers
 
           epoch_loss    += loss.item
           epoch_batches += 1
+          release_memory
 
           next unless position == window_size - 1
 
@@ -176,6 +177,7 @@ module Trainers
       raise ArgumentError, "No eval_dataset provided" unless dataset
 
       device = @args.resolved_device
+      @model.to(device)
       @model.eval
 
       all_preds  = []
@@ -197,6 +199,7 @@ module Trainers
             all_labels << labels.detach.cpu
           end
           all_preds << logits.detach.cpu
+          release_memory
         end
       end
 
@@ -218,6 +221,7 @@ module Trainers
     # classification, are padded to the longest with -100.
     def predict(test_dataset)
       device = @args.resolved_device
+      @model.to(device)
       @model.eval
 
       all_preds = []
@@ -226,6 +230,7 @@ module Trainers
           batch = move_to_device(batch, device)
           pop_labels(batch)
           all_preds << logits_of(forward(batch)).detach.cpu
+          release_memory
         end
       end
       @model.train
@@ -249,8 +254,8 @@ module Trainers
       dtype     = params.first&.dtype || "no parameters"
       percent   = total.positive? ? trainable * 100.0 / total : 0.0
 
-      Trainers.log(:info, "Training on #{device.respond_to?(:type) ? device.type : device} (#{dtype}): #{@train_dataset.size} examples, " \
-                          "#{num_epochs} epochs, #{total_steps} optimizer steps " \
+      Trainers.log(:info, "Training on #{device.respond_to?(:type) ? device.type : device} (#{dtype}): #{LoraUtils.format_number(@train_dataset.size)} examples, " \
+                          "#{num_epochs} epoch#{'s' unless num_epochs == 1}, #{LoraUtils.format_number(total_steps)} optimizer steps " \
                           "(batch #{@args.per_device_train_batch_size} x accumulation #{@args.gradient_accumulation_steps}), " \
                           "#{LoraUtils.format_number(trainable)} of #{LoraUtils.format_number(total)} " \
                           "parameters trainable (#{format('%.2f', percent)}%)")
@@ -302,6 +307,15 @@ module Trainers
       else
         Torch::NN::F.cross_entropy(logits, labels)
       end
+    end
+
+    # torch-rb tensors are freed when Ruby garbage-collects them, and Ruby
+    # cannot see the memory LibTorch holds for them, so it rarely collects.
+    # Each batch's activations would then pile up: evaluating DistilBERT on
+    # MPS reached 22 GiB in 17 batches. A minor collection per batch keeps
+    # memory flat and costs under a millisecond.
+    def release_memory
+      GC.start(full_mark: false, immediate_sweep: true)
     end
 
     def logits_of(output)

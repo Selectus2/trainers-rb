@@ -130,3 +130,37 @@ class EvalLossWeightingTest < Minitest::Test
     assert_in_delta expected.item, quietly { t.evaluate }[:eval_loss], 1e-6
   end
 end
+
+# Found by the 0.4.0 dogfood run: evaluate and predict before train crashed
+# on MPS ("Passed CPU tensor to MPS op"), as only train moved the model
+class EvaluateDeviceTest < Minitest::Test
+  def test_evaluate_and_predict_move_the_model_to_the_device
+    model = TinyClassifier.new
+    moved = []
+    model.define_singleton_method(:to) { |device| moved << device.to_s; super(device) }
+    data = synthetic_dataset(4)
+    t = Trainers::Trainer.new(model: model, args: training_args, train_dataset: data, eval_dataset: data)
+
+    quietly { t.evaluate }
+    t.predict(data)
+    assert_equal %w[cpu cpu], moved
+  end
+
+  # Found by the same run: activations piled up until MPS ran out of memory,
+  # because Ruby's GC can't see LibTorch's memory. Each batch now collects.
+  def test_each_batch_collects_garbage
+    data = synthetic_dataset(6)
+    t = Trainers::Trainer.new(model: TinyClassifier.new, args: training_args(per_device_train_batch_size: 2,
+                              per_device_eval_batch_size: 2, num_train_epochs: 1), train_dataset: data, eval_dataset: data)
+    collections = 0
+    t.define_singleton_method(:release_memory) { collections += 1; super() }
+
+    quietly { t.train }
+    assert_equal 3, collections
+    quietly { t.evaluate }
+    assert_equal 6, collections
+    t.predict(data)
+    assert_equal 9, collections
+  end
+end
+
